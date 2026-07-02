@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mapsui.Extensions" Version="5.0.2" />
+    <PackageReference Include="Mapsui.Wpf" Version="5.0.2" />
+    <PackageReference Include="MaxRev.Gdal.Core" Version="3.13.1.534" />
+    <PackageReference Include="MaxRev.Gdal.WindowsRuntime.Minimal" Version="3.13.1.534" />
+    <PackageReference Include="OpenTK" Version="4.9.4" />
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.6" />
+    <PackageReference Include="SkiaSharp.Views.WPF" Version="3.119.1" />
+  </ItemGroup>
+
+  <!-- 打包 Python 推理环境 (如果 runtime 目录存在) -->
+  <ItemGroup>
+    <Content Include="..\python_env\runtime\**\*"
+             Link="python_env\runtime\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             Condition="Exists('..\python_env\runtime')" />
+  </ItemGroup>
+
+</Project>

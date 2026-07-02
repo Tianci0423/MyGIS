@@ -1,0 +1,148 @@
+<Window x:Class="MyGIS.Dialogs.LayerPropertiesDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="图层属性" Width="420" Height="520"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="#F8F8F8">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- 图层名称 -->
+                <TextBlock Text="图层名称" FontSize="12" Foreground="#888" Margin="0,0,0,2"/>
+                <TextBlock x:Name="LayerNameText" FontSize="14" FontWeight="SemiBold"
+                           Foreground="#222" Margin="0,0,0,12"/>
+
+                <!-- 类型 -->
+                <TextBlock Text="类型" FontSize="12" Foreground="#888" Margin="0,0,0,2"/>
+                <TextBlock x:Name="LayerTypeText" FontSize="13" Foreground="#444" Margin="0,0,0,12"/>
+
+                <!-- 文件路径 -->
+                <TextBlock Text="文件路径" FontSize="12" Foreground="#888" Margin="0,0,0,2"/>
+                <TextBlock x:Name="FilePathText" FontSize="13" Foreground="#444"
+                           TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                <!-- 坐标系 -->
+                <TextBlock Text="坐标系" FontSize="12" Foreground="#888" Margin="0,0,0,2"/>
+                <TextBlock x:Name="CrsText" FontSize="13" Foreground="#444" Margin="0,0,0,12"/>
+
+                <!-- 范围 -->
+                <TextBlock Text="范围" FontSize="12" Foreground="#888" Margin="0,0,0,2"/>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock x:Name="MinXLabel" Text="最小经度" FontSize="11" Foreground="#AAA"/>
+                        <TextBlock x:Name="MinXText" FontSize="13" Foreground="#444"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock x:Name="MaxXLabel" Text="最大经度" FontSize="11" Foreground="#AAA"/>
+                        <TextBlock x:Name="MaxXText" FontSize="13" Foreground="#444"/>
+                    </StackPanel>
+                </Grid>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock x:Name="MinYLabel" Text="最小纬度" FontSize="11" Foreground="#AAA"/>
+                        <TextBlock x:Name="MinYText" FontSize="13" Foreground="#444"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock x:Name="MaxYLabel" Text="最大纬度" FontSize="11" Foreground="#AAA"/>
+                        <TextBlock x:Name="MaxYText" FontSize="13" Foreground="#444"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- 栅格信息 (仅栅格图层可见) -->
+                <StackPanel x:Name="RasterPanel" Visibility="Collapsed">
+                    <Separator Margin="0,0,0,10" Background="#DDD"/>
+
+                    <TextBlock Text="栅格信息" FontSize="12" FontWeight="SemiBold"
+                               Foreground="#555" Margin="0,0,0,8"/>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="栅格宽度" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="RasterWidthText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="栅格高度" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="RasterHeightText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="波段数" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="BandCountText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="渲染器" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="RendererText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="金字塔层级" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="OverviewText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="拉伸方式" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="StretchText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+
+                <!-- 矢量信息 (仅矢量图层可见) -->
+                <StackPanel x:Name="VectorPanel" Visibility="Collapsed">
+                    <Separator Margin="0,0,0,10" Background="#DDD"/>
+
+                    <TextBlock Text="矢量信息" FontSize="12" FontWeight="SemiBold"
+                               Foreground="#555" Margin="0,0,0,8"/>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="要素数量" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="FeatureCountText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="编码" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="EncodingText" FontSize="13" Foreground="#444"/>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 关闭按钮 -->
+        <Button Grid.Row="1" Content="关闭" Width="80" Height="30"
+                HorizontalAlignment="Right" Margin="0,12,0,0"
+                Click="OnCloseClick" Cursor="Hand"
+                Background="#E5E7EB" Foreground="#333" BorderThickness="0"/>
+    </Grid>
+</Window>

@@ -1,0 +1,36 @@
+# Build outputs
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+publish/
+
+# Visual Studio user/workspace files
+.vs/
+.claude/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local Python runtime and model assets
+python_env/
+**/python_env/
+**/fusion_model/
+*.pth
+*.pt
+*.onnx
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Runtime artifacts
+*.log
+*.tmp
+*.cache
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,94 @@
+<Window x:Class="MyGIS.Dialogs.FusionDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="影像融合" MinWidth="420" MinHeight="380" Width="500" Height="460"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="#F8FAFC">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="选择已配准到同一网格的 MS（4 波段）与 PAN（1 波段）影像，运行影像融合。"
+                   Foreground="#475569" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="MS 影像" VerticalAlignment="Center" Foreground="#334155"/>
+            <ComboBox x:Name="MsBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                      IsEditable="True" IsTextSearchEnabled="True" StaysOpenOnEdit="True"
+                      DisplayMemberPath="Name"
+                      DropDownClosed="OnMsDropDownClosed"/>
+            <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowseMs"/>
+        </Grid>
+
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="PAN 影像" VerticalAlignment="Center" Foreground="#334155"/>
+            <ComboBox x:Name="PanBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                      IsEditable="True" IsTextSearchEnabled="True" StaysOpenOnEdit="True"
+                      DisplayMemberPath="Name"
+                      DropDownClosed="OnPanDropDownClosed"/>
+            <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowsePan"/>
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="输出路径" VerticalAlignment="Center" Foreground="#334155"/>
+            <TextBox x:Name="OutputBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowseOutput"/>
+        </Grid>
+
+        <Grid Grid.Row="4" Margin="0,4,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="参数" VerticalAlignment="Center" Foreground="#334155"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="scale" VerticalAlignment="Center" Foreground="#888" Margin="0,0,4,0"/>
+                <TextBox x:Name="FloatScaleBox" Width="60" Height="24" VerticalContentAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="5" Background="#EEF2F7" BorderBrush="#CBD5E1" BorderThickness="1" Padding="10" CornerRadius="4">
+            <TextBlock Text="输入约定：MS 为 4 波段上采样影像，PAN 为 1 波段影像，二者必须已配准并具有相同空间尺寸、坐标系和 transform。"
+                       Foreground="#475569" TextWrapping="Wrap"/>
+        </Border>
+
+        <CheckBox x:Name="LoadAfterFusionBox"
+                  Grid.Row="6"
+                  Content="融合完成后自动加载结果"
+                  IsChecked="True"
+                  Foreground="#334155"
+                  Margin="80,10,0,0"/>
+
+        <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="开始融合" Width="92" Height="32" Click="OnRunClick"
+                    Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+            <Button Content="取消" Width="80" Height="32" Click="OnCancelClick" Margin="8,0,0,0"
+                    Background="#E5E7EB" Foreground="#334155" BorderThickness="0" Cursor="Hand"/>
+        </StackPanel>
+    </Grid>
+</Window>
