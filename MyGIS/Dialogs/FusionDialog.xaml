@@ -60,18 +60,6 @@
             <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowseOutput"/>
         </Grid>
 
-        <Grid Grid.Row="4" Margin="0,4,0,8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="参数" VerticalAlignment="Center" Foreground="#334155"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="scale" VerticalAlignment="Center" Foreground="#888" Margin="0,0,4,0"/>
-                <TextBox x:Name="FloatScaleBox" Width="60" Height="24" VerticalContentAlignment="Center"/>
-            </StackPanel>
-        </Grid>
-
         <Border Grid.Row="5" Background="#EEF2F7" BorderBrush="#CBD5E1" BorderThickness="1" Padding="10" CornerRadius="4">
             <TextBlock Text="输入约定：MS 为 4 波段上采样影像，PAN 为 1 波段影像，二者必须已配准并具有相同空间尺寸、坐标系和 transform。"
                        Foreground="#475569" TextWrapping="Wrap"/>

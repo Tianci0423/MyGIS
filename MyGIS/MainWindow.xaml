@@ -213,7 +213,7 @@
                             <TextBlock Style="{StaticResource ToolLabel}" Text="添加数据"/>
                         </StackPanel>
                     </Button>
-                    <Button Style="{StaticResource ToolButton}" ToolTip="保存项目" Click="OnSaveClick">
+                    <Button Style="{StaticResource ToolButton}" ToolTip="保存项目" Click="OnMenuSave">
                         <StackPanel>
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
                                 <Path Stroke="#2F4058" StrokeThickness="1.7" StrokeLineJoin="Round" Fill="#E9F2FF"

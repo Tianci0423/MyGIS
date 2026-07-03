@@ -61,22 +61,7 @@ namespace MyGIS.Services
 
         public static int[] SelectDisplayBands(Dataset ds, int bands)
         {
-            int red = 0, green = 0, blue = 0;
-            for (int i = 1; i <= bands; i++)
-            {
-                if (!TryGetBand(ds, i, out var band) || band == null)
-                    continue;
-
-                var ci = band.GetRasterColorInterpretation();
-                if (ci == ColorInterp.GCI_RedBand) red = i;
-                else if (ci == ColorInterp.GCI_GreenBand) green = i;
-                else if (ci == ColorInterp.GCI_BlueBand) blue = i;
-            }
-
-            if (red > 0 && green > 0 && blue > 0)
-                return new[] { red, green, blue };
-
-            if (bands >= 4)
+            if (bands >= 3)
                 return new[] { 3, 2, 1 };
 
             return Enumerable.Range(1, Math.Min(bands, 3)).ToArray();

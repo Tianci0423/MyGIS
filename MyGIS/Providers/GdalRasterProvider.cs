@@ -30,6 +30,7 @@ namespace MyGIS.Providers
         private readonly SemaphoreSlim _renderSemaphore = new(1, 1);
         private readonly Dictionary<RenderCacheKey, CachedRender> _renderCache = new();
         private readonly LinkedList<RenderCacheKey> _renderCacheLru = new();
+        private readonly Dictionary<StretchType, StretchParameters> _stretchByType = new();
         private const int TileGridScreenPixels = 512;
         private const int FinalTileRenderPixels = 512;
         private const int InteractiveTileRenderPixels = 256;
@@ -56,6 +57,7 @@ namespace MyGIS.Providers
             _fullExtent = ComputeExtent();
             _rendererType = rendererType;
             _stretch = stretch;
+            _stretchByType[stretch.Type] = CloneStretchParameters(stretch);
             _sourceBandIndexes = sourceBandIndexes;
             _totalBands = _handle.DS.RasterCount;
             _rasterCrs = ReadCrs();
@@ -130,16 +132,37 @@ namespace MyGIS.Providers
             lock (_dsLock)
             {
                 ThrowIfDisposed();
+                if (_stretch.Type == newType)
+                    return;
+
                 var colorRamp = _stretch.ColorRamp;
-                _stretch = RasterRenderer.ComputeDisplayStretchParameters(
-                    _handle.DS,
-                    _sourceBandIndexes,
-                    _rendererType,
-                    newType);
+                if (_stretchByType.TryGetValue(newType, out var cached))
+                {
+                    _stretch = CloneStretchParameters(cached);
+                }
+                else if (_stretch.SortedValues.Any(values => values.Count > 0))
+                {
+                    _stretch = CloneStretchParameters(_stretch);
+                    _stretch.Type = newType;
+                    RasterRenderer.ApplyStretch(_stretch);
+                    _stretchByType[newType] = CloneStretchParameters(_stretch);
+                }
+                else
+                {
+                    _stretch = RasterRenderer.ComputeDisplayStretchParameters(
+                        _handle.DS,
+                        _sourceBandIndexes,
+                        _rendererType,
+                        newType);
+                    _stretchByType[newType] = CloneStretchParameters(_stretch);
+                }
                 _stretch.ColorRamp = colorRamp;
                 ClearRenderCache();
             }
         }
+
+        public Task ChangeStretchAsync(StretchType newType)
+            => Task.Run(() => ChangeStretch(newType));
 
         public void ChangeColorRamp(ColorRampType newRamp)
         {
@@ -163,6 +186,8 @@ namespace MyGIS.Providers
                     _handle.DS, _sourceBandIndexes,
                     _sourceBandIndexes.Length == 1 ? RasterRendererType.Gray : RasterRendererType.Rgb,
                     _stretch.Type);
+                _stretchByType.Clear();
+                _stretchByType[_stretch.Type] = CloneStretchParameters(_stretch);
                 ClearRenderCache();
             }
         }
@@ -670,7 +695,7 @@ namespace MyGIS.Providers
                 DataMax = (float[])source.DataMax.Clone(),
                 HasNoData = (bool[])source.HasNoData.Clone(),
                 NoDataValues = (double[])source.NoDataValues.Clone(),
-                SortedValues = source.SortedValues.Select(v => v != null ? new List<float>(v) : new List<float>()).ToArray(),
+                SortedValues = (List<float>[])source.SortedValues.Clone(),
                 Mean = (float[])source.Mean.Clone(),
                 StdDev = (float[])source.StdDev.Clone(),
                 Cdf = source.Cdf.Select(c => c != null ? (byte[])c.Clone() : Array.Empty<byte>()).ToArray()

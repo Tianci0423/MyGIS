@@ -17,6 +17,7 @@ namespace MyGIS.Dialogs
     {
         private const int OutputBandCount = 4;
         private const int OutputBytesPerSample = 4; // Fusion model writes float32.
+        internal const double DefaultFloatScale = 2047d;
         private const double RecommendedSpaceMultiplier = 1.20;
         private const long RecommendedSpacePaddingBytes = 512L * 1024L * 1024L;
         private static readonly Regex PercentRegex = new(
@@ -267,17 +268,6 @@ namespace MyGIS.Dialogs
                 output = Path.Combine(dir, $"{name}_fused.tif");
             }
 
-            float floatScale = 2047f;
-            string scaleText = FloatScaleBox.Text.Trim();
-            if (!string.IsNullOrWhiteSpace(scaleText))
-            {
-                if (!float.TryParse(scaleText, NumberStyles.Float, CultureInfo.InvariantCulture, out floatScale))
-                {
-                    MessageBox.Show("Float scale 需要是数字。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return false;
-                }
-            }
-
             if (!ValidateFusionInputs(ms, pan))
                 return false;
 
@@ -288,7 +278,7 @@ namespace MyGIS.Dialogs
                 ms,
                 pan,
                 output,
-                floatScale,
+                DefaultFloatScale,
                 32,
                 false,
                 false,

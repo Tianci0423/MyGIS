@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
@@ -329,15 +328,6 @@ namespace MyGIS.Dialogs
                 return;
             }
 
-            double floatScale = 2047d;
-            string scaleText = FloatScaleBox.Text.Trim();
-            if (!string.IsNullOrWhiteSpace(scaleText) &&
-                !double.TryParse(scaleText, NumberStyles.Float, CultureInfo.InvariantCulture, out floatScale))
-            {
-                MessageBox.Show(this, "Float scale 需要是数字。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
             string batchId = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             var requests = new List<FusionRequest>(_tasks.Count);
 
@@ -368,7 +358,7 @@ namespace MyGIS.Dialogs
                     task.MsPath,
                     task.PanPath,
                     output,
-                    floatScale,
+                    FusionDialog.DefaultFloatScale,
                     32,
                     false,
                     false,

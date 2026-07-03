@@ -43,6 +43,9 @@ namespace MyGIS
         private Process? _runningPythonProcess;
         private readonly ObservableCollection<LayerItem> _layerItems = new();
         private ICollectionView? _layerItemsView;
+        private readonly Dictionary<Providers.GdalRasterProvider, Dialogs.BandDisplayDialog> _bandDisplayDialogs = new();
+        private string? _currentProjectPath;
+        private bool _lastSaveSucceeded;
 
         private void KillRunningPythonProcess()
         {
@@ -584,6 +587,7 @@ namespace MyGIS
                     return;
 
                 ClearAllLayers();
+                _currentProjectPath = null;
             }
             catch (Exception ex)
             {
@@ -963,7 +967,7 @@ namespace MyGIS
 
         private void OnMenuSave(object sender, RoutedEventArgs e)
         {
-            Dispatcher.BeginInvoke(new Action(() => OnSaveClick(this, new RoutedEventArgs())));
+            Dispatcher.BeginInvoke(new Action(() => TrySaveCurrentProject()));
         }
 
         private void OnWindowClosing(object? sender, CancelEventArgs e)
@@ -986,10 +990,25 @@ namespace MyGIS
 
             return result switch
             {
-                MessageBoxResult.Yes => TrySaveProjectWithDialog(),
+                MessageBoxResult.Yes => TrySaveCurrentProject(),
                 MessageBoxResult.No => true,
                 _ => false
             };
+        }
+
+        private bool TrySaveCurrentProject()
+        {
+            if (!string.IsNullOrWhiteSpace(_currentProjectPath))
+                return TrySaveProject(_currentProjectPath);
+
+            return TrySaveProjectWithDialog();
+        }
+
+        private bool TrySaveProject(string filePath)
+        {
+            _lastSaveSucceeded = false;
+            SaveProject(filePath);
+            return _lastSaveSucceeded;
         }
 
         private bool TrySaveProjectWithDialog()
@@ -1006,8 +1025,7 @@ namespace MyGIS
 
             try
             {
-                SaveProject(dlg.FileName);
-                return true;
+                return TrySaveProject(dlg.FileName);
             }
             catch (Exception ex)
             {
@@ -1059,6 +1077,7 @@ namespace MyGIS
 
             // Clear existing layers
             ClearAllLayers();
+            _currentProjectPath = null;
 
             // Load layers in saved order
             var existing = project.Layers.Where(e => File.Exists(e.FilePath)).ToList();
@@ -1125,6 +1144,7 @@ namespace MyGIS
                 RefreshStatusBar();
             }
             HideProgress();
+            _currentProjectPath = Path.GetFullPath(dlg.FileName);
         }
 
         private void OnAddDataClick(object sender, RoutedEventArgs e)
@@ -1262,6 +1282,12 @@ namespace MyGIS
 
         private void DisposeLayerItem(LayerItem item)
         {
+            if (GetRasterProvider(item.Layer) is { } provider &&
+                _bandDisplayDialogs.Remove(provider, out var displayDialog))
+            {
+                displayDialog.Close();
+            }
+
             item.PropertyChanged -= OnLayerItemPropertyChanged;
             item.RasterProviderHandle?.Dispose();
             item.RasterProviderHandle = null;
@@ -1437,6 +1463,8 @@ namespace MyGIS
                 var json = JsonSerializer.Serialize(project,
                     new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(filePath, json);
+                _currentProjectPath = Path.GetFullPath(filePath);
+                _lastSaveSucceeded = true;
             }
             catch (Exception ex)
             {
@@ -1723,6 +1751,12 @@ namespace MyGIS
             var item = GetLayerItemFromSender(sender);
             if (item?.Layer?.Tag is not Providers.GdalRasterProvider provider) return;
 
+            if (_bandDisplayDialogs.TryGetValue(provider, out var existingDialog))
+            {
+                existingDialog.Activate();
+                return;
+            }
+
             bool isMulti = provider.RendererType == Services.RasterRendererType.Rgb;
             var dlg = new Dialogs.BandDisplayDialog(
                 provider.TotalBands,
@@ -1732,33 +1766,47 @@ namespace MyGIS
                 isMulti);
 
             dlg.Owner = this;
-            dlg.SettingsApplied += (_, args) =>
+            _bandDisplayDialogs[provider] = dlg;
+            dlg.Closed += (_, _) => _bandDisplayDialogs.Remove(provider);
+            dlg.SettingsApplied += async (_, args) =>
             {
-                bool changed = false;
-                if (args.StretchChanged)
+                try
                 {
-                    provider.ChangeStretch(args.SelectedStretch);
-                    changed = true;
-                }
-                if (args.ColorRampChanged)
-                {
-                    provider.ChangeColorRamp(args.SelectedColorRamp);
-                    changed = true;
-                }
-                if (args.BandsChanged)
-                {
-                    provider.ChangeBands(args.SelectedBands);
-                    changed = true;
-                }
+                    bool changed = false;
+                    if (args.StretchChanged)
+                    {
+                        await provider.ChangeStretchAsync(args.SelectedStretch);
+                        changed = true;
+                    }
+                    if (args.ColorRampChanged)
+                    {
+                        provider.ChangeColorRamp(args.SelectedColorRamp);
+                        changed = true;
+                    }
+                    if (args.BandsChanged)
+                    {
+                        provider.ChangeBands(args.SelectedBands);
+                        changed = true;
+                    }
 
-                if (changed)
+                    if (changed)
+                    {
+                        RefreshLegend(item, provider);
+                        RefreshLayerRenderer(item);
+                    }
+                }
+                catch (ObjectDisposedException)
                 {
-                    RefreshLegend(item, provider);
-                    RefreshLayerRenderer(item);
+                    dlg.Close();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, $"应用显示设置失败：\n{ex.Message}", "显示设置",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             };
 
-            dlg.ShowDialog();
+            dlg.Show();
         }
 
         private void OnOpenAttributeTable(object sender, RoutedEventArgs e)

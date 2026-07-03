@@ -59,27 +59,19 @@
 
         <Grid Grid.Row="3" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="130"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <TextBlock Text="参数" VerticalAlignment="Center" Foreground="#334155"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="scale" VerticalAlignment="Center" Foreground="#64748B" Margin="0,0,4,0"/>
-                <TextBox x:Name="FloatScaleBox" Width="70" Height="24" VerticalContentAlignment="Center"/>
-            </StackPanel>
-
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                 <CheckBox x:Name="LoadAfterFusionBox" Content="完成后加载结果" Foreground="#334155" Margin="0,0,18,0"/>
                 <CheckBox x:Name="ContinueOnErrorBox" Content="失败后继续下一项" IsChecked="True" Foreground="#334155"/>
             </StackPanel>
 
-            <Button Grid.Column="3" Content="移除选中" Height="28" Width="86" Click="OnRemoveSelected"
+            <Button Grid.Column="1" Content="移除选中" Height="28" Width="86" Click="OnRemoveSelected"
                     Background="#E5E7EB" Foreground="#334155" BorderThickness="0" Cursor="Hand"/>
-            <Button Grid.Column="4" Content="清空" Height="28" Width="64" Margin="8,0,0,0" Click="OnClearTasks"
+            <Button Grid.Column="2" Content="清空" Height="28" Width="64" Margin="8,0,0,0" Click="OnClearTasks"
                     Background="#E5E7EB" Foreground="#334155" BorderThickness="0" Cursor="Hand"/>
         </Grid>
 
