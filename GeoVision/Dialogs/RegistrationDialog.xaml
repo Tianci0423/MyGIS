@@ -1,0 +1,134 @@
+<Window x:Class="GeoVision.Dialogs.RegistrationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="影像配准" MinWidth="440" MinHeight="420" Width="520" Height="480"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="#F8FAFC">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="MS 影像" VerticalAlignment="Center" Foreground="#334155"/>
+            <ComboBox x:Name="MsBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                      IsEditable="True" IsTextSearchEnabled="True" StaysOpenOnEdit="True"
+                      DisplayMemberPath="Name"
+                      DropDownClosed="OnMsDropDownClosed"
+                      TextInput="OnMsTextChanged"/>
+            <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowseMs"/>
+        </Grid>
+
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="PAN 影像" VerticalAlignment="Center" Foreground="#334155"/>
+            <ComboBox x:Name="PanBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                      IsEditable="True" IsTextSearchEnabled="True" StaysOpenOnEdit="True"
+                      DisplayMemberPath="Name"
+                      DropDownClosed="OnPanDropDownClosed"
+                      TextInput="OnPanTextChanged"/>
+            <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowsePan"/>
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="输出目录" VerticalAlignment="Center" Foreground="#334155"/>
+            <TextBox x:Name="OutputDirBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                     TextChanged="OnOutputDirChanged"/>
+            <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowseOutputDir"/>
+        </Grid>
+
+        <Grid Grid.Row="4" Margin="0,4,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="重采样" VerticalAlignment="Center" Foreground="#334155"/>
+            <ComboBox x:Name="ResampleBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                      SelectedIndex="0">
+                <ComboBoxItem Content="双线性 (Bilinear)" Tag="bilinear"/>
+                <ComboBoxItem Content="最近邻 (Nearest)" Tag="nearest"/>
+                <ComboBoxItem Content="三次卷积 (Cubic)" Tag="cubic"/>
+                <ComboBoxItem Content="Lanczos" Tag="lanczos"/>
+            </ComboBox>
+        </Grid>
+
+        <Border Grid.Row="5" Background="#EEF2F7" BorderBrush="#CBD5E1" BorderThickness="1" Padding="10" CornerRadius="4" Margin="0,0,0,8">
+            <TextBlock Text="输出会裁剪到 MS/PAN 的共同覆盖区：MS 重采样到 PAN 网格，PAN 同步裁剪，二者宽高、坐标系和 transform 完全一致。"
+                       Foreground="#475569" TextWrapping="Wrap"/>
+        </Border>
+
+        <Grid Grid.Row="6" Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="输出预览" VerticalAlignment="Center" Foreground="#334155"/>
+            <StackPanel Grid.Column="1">
+                <TextBlock x:Name="MsOutPreview" FontSize="11" Foreground="#64748B"
+                           Text="MS: —" Margin="0,2,0,2"/>
+                <TextBlock x:Name="PanOutPreview" FontSize="11" Foreground="#64748B"
+                           Text="PAN: —" Margin="0,2,0,2"/>
+            </StackPanel>
+        </Grid>
+
+        <Border x:Name="ValidationPanel" Grid.Row="7" Margin="0,8,0,0"
+                Background="#F8FAFC" BorderBrush="#CBD5E1" BorderThickness="1"
+                Padding="10" CornerRadius="4" Visibility="Collapsed">
+            <StackPanel>
+                <TextBlock x:Name="ValMsInfo" FontSize="11" Foreground="#475569" Margin="0,2,0,2"/>
+                <TextBlock x:Name="ValPanInfo" FontSize="11" Foreground="#475569" Margin="0,2,0,2"/>
+                <Separator Margin="0,4,0,4" Background="#E2E8F0"/>
+                <TextBlock x:Name="ValBandCheck" FontSize="11" Margin="0,2,0,2"/>
+                <TextBlock x:Name="ValCrsCheck" FontSize="11" Margin="0,2,0,2"/>
+                <TextBlock x:Name="ValOverlapCheck" FontSize="11" Margin="0,2,0,2"/>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="8" Margin="80,10,0,0" VerticalAlignment="Top">
+            <CheckBox x:Name="LoadAfterRegistrationBox"
+                      Content="配准完成后自动加载结果"
+                      IsChecked="True"
+                      Foreground="#334155"
+                      Margin="0,0,0,6"/>
+            <CheckBox x:Name="KeepBlackBorderBox"
+                      Content="快速模式：保留共同覆盖区黑边，跳过黑边扫描"
+                      IsChecked="False"
+                      Foreground="#334155"/>
+            <TextBlock Text="快速模式只保证 MS/PAN 的尺寸、坐标系、transform 完全一致，不保证两者“非零/有效像元区域”完全一致。用于后续融合时建议关闭。"
+                       Foreground="#64748B"
+                       FontSize="11"
+                       TextWrapping="Wrap"
+                       Margin="22,4,0,0"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="9" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="开始配准" Width="92" Height="32" Click="OnRunClick"
+                    Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+            <Button Content="取消" Width="80" Height="32" Click="OnCancelClick" Margin="8,0,0,0"
+                    Background="#E5E7EB" Foreground="#334155" BorderThickness="0" Cursor="Hand"/>
+        </StackPanel>
+    </Grid>
+</Window>

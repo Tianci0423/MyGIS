@@ -1,6 +1,6 @@
-# MyGIS
+# GeoVision
 
-MyGIS 是一个基于 .NET 8 WPF 的桌面 GIS 应用，用于栅格影像浏览、图层管理、属性查看、波段显示、波段计算、影像配准和影像融合等实验性功能。
+GeoVision 是一个基于 .NET 8 WPF 的桌面 GIS 应用，用于栅格影像浏览、图层管理、属性查看、波段显示、波段计算、影像配准和影像融合等实验性功能。
 
 项目主体使用 C# 编写，界面层基于 WPF，栅格数据处理依赖 GDAL、Mapsui、SkiaSharp 和 OpenTK。影像配准与融合相关的重计算流程通过本地 Python 运行环境调用脚本完成。
 
@@ -32,7 +32,7 @@ MyGIS 是一个基于 .NET 8 WPF 的桌面 GIS 应用，用于栅格影像浏览
 
 ## Python 环境依赖
 
-以下版本来自当前本地环境 `D:\MyGIS\python_env\runtime\python` 的 `pip freeze` 输出：
+以下版本来自当前仓库内 `python_env\runtime\python` 的 `pip freeze` 输出：
 
 ```text
 affine==2.4.0
