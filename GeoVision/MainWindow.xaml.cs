@@ -621,6 +621,8 @@ namespace GeoVision
             var itemsToDispose = _layerItems.ToList();
 
             _mapCrs = null;
+            if (MapControl.Map != null)
+                MapControl.Map.CRS = "EPSG:3857";
             _identifyDialog?.Close();
             _identifyDialog = null;
             ClearIdentifyHighlight();
@@ -1708,9 +1710,10 @@ namespace GeoVision
                         }
                     }
 
-                    AddLayerToRenderer(layer);
-                    var crs = AddLayerItem(layer);
+                    string crs = GetLayerCrs(layer);
                     CheckCrsMismatch(crs, entry.Name);
+                    AddLayerToRenderer(layer);
+                    AddLayerItem(layer);
                 }
                 catch (Exception ex)
                 {
@@ -1767,9 +1770,10 @@ namespace GeoVision
                     var layer = await Task.Run(async () => await DataLoader.LoadAsync(path, loadProgress));
                     if (layer != null)
                     {
-                        AddLayerToRenderer(layer);
-                        var crs = AddLayerItem(layer);
+                        string crs = GetLayerCrs(layer);
                         CheckCrsMismatch(crs, Path.GetFileName(path));
+                        AddLayerToRenderer(layer);
+                        AddLayerItem(layer);
                     }
                     else
                     {
@@ -1811,7 +1815,8 @@ namespace GeoVision
         {
             if (string.IsNullOrWhiteSpace(layerCrs) || layerCrs == "未知") return;
 
-            if (_mapCrs == null)
+            string? referenceCrs = _mapCrs ?? GetFirstKnownLayerCrs();
+            if (string.IsNullOrWhiteSpace(referenceCrs))
             {
                 _mapCrs = layerCrs;
                 if (MapControl.Map != null)
@@ -1819,20 +1824,54 @@ namespace GeoVision
                 return;
             }
 
-            string keyMap = CoordinateConverter.GetEpsgComparisonKey(_mapCrs);
+            _mapCrs = referenceCrs;
+            string keyMap = CoordinateConverter.GetEpsgComparisonKey(referenceCrs);
             string keyLayer = CoordinateConverter.GetEpsgComparisonKey(layerCrs);
-            if (!string.IsNullOrEmpty(keyMap) && keyMap == keyLayer)
+            if (!string.IsNullOrEmpty(keyMap) &&
+                string.Equals(keyMap, keyLayer, StringComparison.OrdinalIgnoreCase))
                 return;
 
-            string mapName = CoordinateConverter.GetCrsDisplayName(_mapCrs);
+            string mapName = CoordinateConverter.GetCrsDisplayName(referenceCrs);
             string layerName = CoordinateConverter.GetCrsDisplayName(layerCrs);
             MessageBox.Show(
+                this,
                 $"坐标系不一致:\n\n" +
                 $"  当前地图: {mapName}\n" +
                 $"  {fileName}: {layerName}\n\n" +
                 $"不同坐标系的数据叠加可能存在位置偏差。\n" +
                 $"后续版本将支持投影转换。",
                 "坐标系提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        private string? GetFirstKnownLayerCrs()
+        {
+            foreach (var item in _layerItems)
+            {
+                string candidate = GetLayerCrs(item.Layer);
+                if (!string.IsNullOrWhiteSpace(candidate) && candidate != "未知")
+                    return candidate;
+            }
+
+            return null;
+        }
+
+        private static string GetLayerCrs(ILayer? layer)
+        {
+            string? rasterCrs = GetRasterProvider(layer)?.RasterCrs;
+            if (!string.IsNullOrWhiteSpace(rasterCrs))
+                return rasterCrs;
+
+            string? vectorCrs = GetShapeProvider(layer)?.CRS;
+            return string.IsNullOrWhiteSpace(vectorCrs) ? "未知" : vectorCrs;
+        }
+
+        private void RecalculateMapCrs()
+        {
+            string? firstCrs = GetFirstKnownLayerCrs();
+            _mapCrs = firstCrs;
+            if (MapControl.Map != null)
+                MapControl.Map.CRS = firstCrs ?? "EPSG:3857";
+            RefreshStatusBar();
         }
 
         private static Providers.GdalRasterProvider? GetRasterProvider(ILayer? layer)
@@ -2581,6 +2620,7 @@ namespace GeoVision
                     DeleteTempFile(fileToDelete);
             }
 
+            RecalculateMapCrs();
             MapControl.Map?.Refresh();
         }
 
@@ -2607,6 +2647,7 @@ namespace GeoVision
             _layerItems.Remove(item);
             if (fileToDelete != null)
                 DeleteTempFile(fileToDelete);
+            RecalculateMapCrs();
             MapControl.Map?.Refresh();
         }
 

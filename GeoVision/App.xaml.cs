@@ -10,7 +10,6 @@ namespace GeoVision
     {
         protected override void OnStartup(StartupEventArgs e)
         {
-            base.OnStartup(e);
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             GdalBase.ConfigureAll();
             Gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS");
@@ -21,12 +20,21 @@ namespace GeoVision
             Gdal.SetConfigOption("INTERLEAVE_OVERVIEW", "BAND");
             Gdal.SetConfigOption("BIGTIFF_OVERVIEW", "IF_SAFER");
             Gdal.SetConfigOption("SPARSE_OK_OVERVIEW", "ON");
+
+            if (OverviewBuildWorker.IsWorkerCommand(e.Args))
+            {
+                int exitCode = OverviewBuildWorker.Run(e.Args);
+                Shutdown(exitCode);
+                return;
+            }
+
+            base.OnStartup(e);
         }
 
         protected override void OnExit(ExitEventArgs e)
         {
-            base.OnExit(e);
             GdalDatasetManager.DisposeAll();
+            base.OnExit(e);
         }
     }
 }

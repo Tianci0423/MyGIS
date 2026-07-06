@@ -87,14 +87,40 @@ namespace GeoVision.Helpers
         /// </summary>
         public static string GetEpsgComparisonKey(string crs)
         {
-            if (string.IsNullOrEmpty(crs)) return "";
-            int idx = crs.IndexOf("EPSG:", StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) return crs.Trim(); // fallback: compare raw string
-            string sub = crs[idx..];
-            int end = 5;
-            while (end < sub.Length && char.IsDigit(sub[end]))
-                end++;
-            return sub[..end].ToUpperInvariant();
+            if (string.IsNullOrWhiteSpace(crs)) return "";
+
+            string trimmed = crs.Trim();
+            if (trimmed.StartsWith("EPSG:", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(trimmed.AsSpan(5), out int directCode))
+            {
+                return $"EPSG:{directCode}";
+            }
+
+            try
+            {
+                using var sr = new SpatialReference(trimmed);
+                try { sr.AutoIdentifyEPSG(); } catch { }
+
+                string?[] nodes = sr.IsProjected() != 0
+                    ? [null, "PROJCS", "PROJCRS"]
+                    : [null, "GEOGCS", "GEOGCRS"];
+                foreach (string? node in nodes)
+                {
+                    string? authority = sr.GetAuthorityName(node);
+                    string? code = sr.GetAuthorityCode(node);
+                    if (!string.IsNullOrWhiteSpace(authority) &&
+                        !string.IsNullOrWhiteSpace(code))
+                    {
+                        return $"{authority}:{code}".ToUpperInvariant();
+                    }
+                }
+            }
+            catch
+            {
+                // Non-WKT names are compared as normalized text below.
+            }
+
+            return trimmed.ToUpperInvariant();
         }
 
         /// <summary>

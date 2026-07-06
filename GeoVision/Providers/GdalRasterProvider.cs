@@ -109,10 +109,26 @@ namespace GeoVision.Providers
                 using var sr = new OSGeo.OSR.SpatialReference(wkt);
                 if (sr == null) return "未知";
 
-                string? authority = sr.GetAuthorityName(null);
-                string? code = sr.GetAuthorityCode(null);
-                if (!string.IsNullOrEmpty(authority) && !string.IsNullOrEmpty(code))
-                    return $"{authority}:{code}";
+                try { sr.AutoIdentifyEPSG(); } catch { }
+
+                string[] authorityNodes = sr.IsProjected() != 0
+                    ? ["PROJCS", "PROJCRS"]
+                    : ["GEOGCS", "GEOGCRS"];
+                foreach (string node in authorityNodes)
+                {
+                    string? authority = sr.GetAuthorityName(node);
+                    string? code = sr.GetAuthorityCode(node);
+                    if (!string.IsNullOrWhiteSpace(authority) && !string.IsNullOrWhiteSpace(code))
+                        return $"{authority}:{code}";
+                }
+
+                if (sr.IsProjected() == 0)
+                {
+                    string? authority = sr.GetAuthorityName(null);
+                    string? code = sr.GetAuthorityCode(null);
+                    if (!string.IsNullOrWhiteSpace(authority) && !string.IsNullOrWhiteSpace(code))
+                        return $"{authority}:{code}";
+                }
 
                 return sr.GetName() ?? "未知";
             }
