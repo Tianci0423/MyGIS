@@ -26,6 +26,8 @@ namespace GeoVision.Providers
         private int[] _sourceBandIndexes;
         private readonly int _totalBands;
         private readonly object _dsLock = new();
+        private readonly ReaderWriterLockSlim _renderLifecycleLock = new();
+        private readonly Dataset? _threadSafeRenderDataset;
         private readonly object _renderCacheLock = new();
         private readonly SemaphoreSlim _renderSemaphore = new(1, 1);
         private readonly Dictionary<RenderCacheKey, CachedRender> _renderCache = new();
@@ -63,6 +65,7 @@ namespace GeoVision.Providers
             _totalBands = _handle.DS.RasterCount;
             _rasterCrs = ReadCrs();
             (_sourceBlockWidth, _sourceBlockHeight) = ReadSourceBlockSize();
+            _threadSafeRenderDataset = CreateThreadSafeRenderDataset(_handle.DS);
         }
 
         public string FilePath => _handle.FilePath;
@@ -80,6 +83,10 @@ namespace GeoVision.Providers
             _sourceBlockWidth > 0 &&
             _sourceBlockHeight > 0 &&
             _sourceBlockWidth < _rasterWidth &&
+            _sourceBlockHeight < _rasterHeight;
+        public bool UsesFullWidthStrips =>
+            _sourceBlockWidth >= _rasterWidth &&
+            _sourceBlockHeight > 0 &&
             _sourceBlockHeight < _rasterHeight;
 
         private (int Width, int Height) ReadSourceBlockSize()
@@ -237,21 +244,73 @@ namespace GeoVision.Providers
             return CreatePyramidTileRequests(extent, resolution, tileGridScreenPixels, maxTileRenderPixels, tileMargin);
         }
 
-        public byte[] RenderTileToRgba(RasterTileRequest request)
+        public byte[] RenderTileToRgba(RasterTileRequest request, Func<bool>? shouldRender = null)
         {
-            lock (_dsLock)
+            _renderLifecycleLock.EnterReadLock();
+            try
             {
                 ThrowIfDisposed();
-                var bandIndexes = (int[])_sourceBandIndexes.Clone();
-                var stretch = CloneStretchParameters(_stretch);
-                var rendererType = RendererType;
+                if (shouldRender != null && !shouldRender())
+                    return Array.Empty<byte>();
+
+                bool useSharedStripCache = request.Level == 0 && UsesFullWidthStrips;
+                if (_threadSafeRenderDataset == null || useSharedStripCache)
+                {
+                    lock (_dsLock)
+                    {
+                        ThrowIfDisposed();
+                        if (shouldRender != null && !shouldRender())
+                            return Array.Empty<byte>();
+
+                        return RenderTile(_handle.DS, request);
+                    }
+                }
+
+                int[] bandIndexes;
+                StretchParameters stretch;
+                RasterRendererType rendererType;
+                lock (_dsLock)
+                {
+                    bandIndexes = (int[])_sourceBandIndexes.Clone();
+                    stretch = CloneStretchParameters(_stretch);
+                    rendererType = RendererType;
+                }
 
                 return RasterRenderer.RenderToRgba(
-                    _handle.DS, bandIndexes, stretch, rendererType,
+                    _threadSafeRenderDataset, bandIndexes, stretch, rendererType,
                     request.ColStart, request.RowStart,
                     request.ColEnd - request.ColStart,
                     request.RowEnd - request.RowStart,
                     request.BufW, request.BufH);
+            }
+            finally
+            {
+                _renderLifecycleLock.ExitReadLock();
+            }
+        }
+
+        private byte[] RenderTile(Dataset dataset, RasterTileRequest request)
+        {
+            var bandIndexes = (int[])_sourceBandIndexes.Clone();
+            var stretch = CloneStretchParameters(_stretch);
+            var rendererType = RendererType;
+            return RasterRenderer.RenderToRgba(
+                dataset, bandIndexes, stretch, rendererType,
+                request.ColStart, request.RowStart,
+                request.ColEnd - request.ColStart,
+                request.RowEnd - request.RowStart,
+                request.BufW, request.BufH);
+        }
+
+        private static Dataset? CreateThreadSafeRenderDataset(Dataset source)
+        {
+            try
+            {
+                return source.GetThreadSafeDataset(GdalConst.OF_RASTER);
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -341,7 +400,9 @@ namespace GeoVision.Providers
             long levelScale = 1L << level;
             long sourceTilePixelsLong = Math.Min(int.MaxValue, tileGridPixels * levelScale);
             int sourceTilePixels = (int)Math.Max(1, sourceTilePixelsLong);
-            int paddingSourcePixels = (int)Math.Min(int.MaxValue, levelScale);
+            int paddingSourcePixels = level == 0
+                ? 0
+                : (int)Math.Min(int.MaxValue, levelScale);
 
             int maxTileX = Math.Max(0, (_rasterWidth - 1) / sourceTilePixels);
             int maxTileY = Math.Max(0, (_rasterHeight - 1) / sourceTilePixels);
@@ -849,9 +910,18 @@ namespace GeoVision.Providers
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
 
-            lock (_dsLock)
+            _renderLifecycleLock.EnterWriteLock();
+            try
             {
-                _handle.Dispose();
+                lock (_dsLock)
+                {
+                    _threadSafeRenderDataset?.Dispose();
+                    _handle.Dispose();
+                }
+            }
+            finally
+            {
+                _renderLifecycleLock.ExitWriteLock();
             }
         }
 

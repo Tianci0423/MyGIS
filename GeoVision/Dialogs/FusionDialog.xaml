@@ -1,7 +1,7 @@
 <Window x:Class="GeoVision.Dialogs.FusionDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="影像融合" MinWidth="420" MinHeight="380" Width="500" Height="460"
+        Title="影像融合" MinWidth="460" MinHeight="410" Width="540" Height="500"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
         Background="#F8FAFC">
     <Grid Margin="16">
@@ -56,8 +56,21 @@
             <Button Grid.Column="2" Content="浏览" Height="28" Margin="8,0,0,0" Click="OnBrowseOutput"/>
         </Grid>
 
+        <Grid Grid.Row="4" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="80"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="76"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="float_scale" VerticalAlignment="Center" Foreground="#334155"/>
+            <TextBox x:Name="FloatScaleBox" Grid.Column="1" Height="28" VerticalContentAlignment="Center"
+                     ToolTip="填写正数时按该固定值缩放；留空时根据输入影像自动估算。"/>
+            <TextBlock Grid.Column="2" Text="留空自动" Margin="8,0,0,0"
+                       VerticalAlignment="Center" Foreground="#64748B"/>
+        </Grid>
+
         <Border Grid.Row="5" Background="#EEF2F7" BorderBrush="#CBD5E1" BorderThickness="1" Padding="10" CornerRadius="4">
-            <TextBlock Text="输入约定：MS 为 4 波段上采样影像，PAN 为 1 波段影像，二者必须已配准并具有相同空间尺寸、坐标系和 transform。"
+            <TextBlock Text="输入约定：MS 为 4 波段上采样影像，PAN 为 1 波段影像，二者必须已配准并具有相同空间尺寸、坐标系和 transform。float_scale 留空时自动估算；填写时严格使用指定值。"
                        Foreground="#475569" TextWrapping="Wrap"/>
         </Border>
 

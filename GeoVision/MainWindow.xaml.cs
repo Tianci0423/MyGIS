@@ -78,7 +78,6 @@ namespace GeoVision
             ProgressBar.IsIndeterminate = true;
             ProgressBar.Value = 0;
             ProgressPanel.Visibility = Visibility.Visible;
-            StatusText.Text = label;
         }
 
         public void UpdateProgress(string label, int percent)
@@ -97,13 +96,11 @@ namespace GeoVision
                 ProgressBar.Value = percent;
             }
             ProgressPanel.Visibility = Visibility.Visible;
-            StatusText.Text = label;
         }
 
         public void HideProgress()
         {
             ProgressPanel.Visibility = Visibility.Collapsed;
-            StatusText.Text = "就绪";
         }
 
         private IProgress<(int percent, string label)> CreateLoadProgress(
@@ -201,8 +198,6 @@ namespace GeoVision
             GpuRasterMap.PreviewMouseMove += OnClipSelectionMouseMove;
             GpuRasterMap.PreviewMouseLeftButtonUp += OnClipSelectionMouseUp;
             GpuRasterMap.PreviewMouseLeftButtonDown += OnMapClick;
-            GpuRasterMap.ViewportChanged += (_, _) => RefreshStatusBar();
-            RefreshStatusBar();
 
             _coordTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
             _coordTimer.Tick += OnCoordTimerTick;
@@ -269,17 +264,6 @@ namespace GeoVision
                 CoordText.Text = $"X: {worldX:F4}  Y: {worldY:F4}";
             }
 
-            if (!GpuRasterMap.HasRasterLayers)
-                RefreshStatusBar();
-        }
-
-        private void RefreshStatusBar()
-        {
-            var map = MapControl.Map;
-            if (map == null) return;
-
-            string crs = _mapCrs ?? map.CRS ?? "EPSG:3857";
-            CrsStatusText.Text = CoordinateConverter.GetCrsDisplayName(crs);
         }
 
         // ===== 工具栏 =====
@@ -643,7 +627,6 @@ namespace GeoVision
             _layerItems.Clear();
 
             MapControl.Map?.Refresh();
-            RefreshStatusBar();
         }
 
         private List<Dialogs.RasterLayerInfo> GetLoadedRasterLayerInfos()
@@ -656,6 +639,103 @@ namespace GeoVision
             }
 
             return rasterLayers;
+        }
+
+        private async void OnDefineProjection(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Dialogs.RasterDefineProjectionDialog(GetLoadedRasterLayerInfos())
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true || dialog.Request == null)
+                return;
+
+            try
+            {
+                ShowProgress("正在定义投影...");
+                var progress = new Progress<int>(percent =>
+                    UpdateProgress("正在定义投影...", percent));
+                await Services.RasterDefineProjectionService.RunAsync(dialog.Request, progress);
+
+                if (dialog.Request.LoadResult)
+                {
+                    UpdateProgress("定义投影完成，正在加载结果...", 100);
+                    LoadFilesAsync([dialog.Request.OutputPath]);
+                }
+                else
+                {
+                    HideProgress();
+                    string additional = dialog.Request.InPlace
+                        ? "\n\n若该影像当前已加载，请移除后重新加载，以刷新坐标系信息。"
+                        : string.Empty;
+                    MessageBox.Show(
+                        this,
+                        $"坐标系定义已写入：\n{dialog.Request.OutputPath}{additional}",
+                        "定义投影",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                HideProgress();
+                MessageBox.Show(
+                    this,
+                    $"定义投影失败：\n{ex.Message}",
+                    "定义投影",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private async void OnRasterReprojection(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Dialogs.RasterReprojectionDialog(GetLoadedRasterLayerInfos())
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true || dialog.Request == null)
+                return;
+
+            try
+            {
+                KillRunningPythonProcess();
+                ShowProgress("投影转换中...");
+                var progress = new Progress<int>(percent =>
+                    UpdateProgress("投影转换中...", percent));
+                await Services.RasterReprojectionService.RunAsync(
+                    dialog.Request,
+                    process => _runningPythonProcess = process,
+                    progress);
+                _runningPythonProcess = null;
+
+                if (dialog.Request.LoadResult)
+                {
+                    UpdateProgress("投影转换完成，正在加载结果...", 100);
+                    LoadFilesAsync([dialog.Request.OutputPath]);
+                }
+                else
+                {
+                    HideProgress();
+                    MessageBox.Show(
+                        this,
+                        $"投影转换完成：\n{dialog.Request.OutputPath}",
+                        "投影转换",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                _runningPythonProcess = null;
+                HideProgress();
+                MessageBox.Show(
+                    this,
+                    $"投影转换失败：\n{ex.Message}",
+                    "投影转换",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
 
         private async void OnRegistration(object sender, RoutedEventArgs e)
@@ -736,7 +816,10 @@ namespace GeoVision
                     {
                         _runningPythonProcess = null;
                         failures.Add($"{Path.GetFileName(request.MsPath)} + {Path.GetFileName(request.PanPath)}: {ex.Message}");
-                        taskProgress.Report(100);
+                        int failedOverallPercent = (int)Math.Round((i + 1) * 100.0 / requests.Count);
+                        UpdateProgress(
+                            $"批量配准失败 {i + 1}/{requests.Count}: {Path.GetFileName(request.MsPath)}",
+                            failedOverallPercent);
                         if (!dlg.ContinueOnError)
                             break;
                     }
@@ -800,9 +883,13 @@ namespace GeoVision
             try
             {
                 KillRunningPythonProcess();
-                ShowProgress("影像融合中...");
+                UpdateProgress("影像融合中...", 0);
+                var progress = new Progress<int>(percent =>
+                    UpdateProgress("影像融合中...", percent));
                 await Dialogs.FusionDialog.RunInferenceAsync(dlg.Request,
-                    p => _runningPythonProcess = p);
+                    p => _runningPythonProcess = p,
+                    progress);
+                _runningPythonProcess = null;
                 if (dlg.Request.LoadAfterFusion)
                 {
                     UpdateProgress("融合完成，正在加载结果...", 100);
@@ -818,6 +905,7 @@ namespace GeoVision
             }
             catch (Exception ex)
             {
+                _runningPythonProcess = null;
                 HideProgress();
                 MessageBox.Show($"影像融合失败: {ex.Message}", "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
@@ -1737,7 +1825,6 @@ namespace GeoVision
                         MapControl.Map?.Navigator.ZoomToBox(extent, MBoxFit.Fit, 200);
                 }
                 MapControl.Refresh();
-                RefreshStatusBar();
             }
             HideProgress();
             _currentProjectPath = Path.GetFullPath(projectPath);
@@ -1803,7 +1890,6 @@ namespace GeoVision
                         MapControl.Map?.Navigator.ZoomToBox(extent, MBoxFit.Fit, 200);
                 }
                 MapControl.Refresh();
-                RefreshStatusBar();
             }
 
             HideProgress();
@@ -1839,7 +1925,7 @@ namespace GeoVision
                 $"  当前地图: {mapName}\n" +
                 $"  {fileName}: {layerName}\n\n" +
                 $"不同坐标系的数据叠加可能存在位置偏差。\n" +
-                $"后续版本将支持投影转换。",
+                $"可使用“工具 → 坐标系统 → 投影转换（重投影）”转换到统一坐标系。",
                 "坐标系提示", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
@@ -1871,7 +1957,6 @@ namespace GeoVision
             _mapCrs = firstCrs;
             if (MapControl.Map != null)
                 MapControl.Map.CRS = firstCrs ?? "EPSG:3857";
-            RefreshStatusBar();
         }
 
         private static Providers.GdalRasterProvider? GetRasterProvider(ILayer? layer)
@@ -2120,7 +2205,6 @@ namespace GeoVision
                 GpuRasterMap.ZoomIn();
             else
                 MapControl.Map?.Navigator.ZoomIn(200);
-            RefreshStatusBar();
         }
 
         private void OnZoomOutClick(object sender, RoutedEventArgs e)
@@ -2129,7 +2213,6 @@ namespace GeoVision
                 GpuRasterMap.ZoomOut();
             else
                 MapControl.Map?.Navigator.ZoomOut(200);
-            RefreshStatusBar();
         }
 
         private void OnFullExtentClick(object sender, RoutedEventArgs e)
@@ -2141,7 +2224,6 @@ namespace GeoVision
                     GpuRasterMap.ZoomToExtent(extent);
                 else
                     MapControl.Map?.Navigator.ZoomToBox(extent, MBoxFit.Fit, 200);
-                RefreshStatusBar();
             }
         }
 
@@ -2375,7 +2457,6 @@ namespace GeoVision
                 if (rp.GetExtent() is { } rasterExtent)
                 {
                     GpuRasterMap.ZoomToExtent(rasterExtent);
-                    RefreshStatusBar();
                 }
                 return;
             }
@@ -2383,7 +2464,6 @@ namespace GeoVision
             if (item.Layer.Extent is MRect extent)
             {
                 MapControl.Map?.Navigator.ZoomToBox(extent, MBoxFit.Fit, 200);
-                RefreshStatusBar();
             }
         }
 

@@ -42,7 +42,11 @@ namespace GeoVision.Services
         private const int MaxAnalysisSampleDim = 2048;
         private const float PercentClipLow = 0.005f;
         private const float PercentClipHigh = 0.995f;
-        private const int StretchCacheVersion = 2;
+        private const double BackgroundDetectionRatio = 0.02d;
+        private const double BackgroundRelativeTolerance = 0.0001d;
+        private const double MinimumBackgroundTolerance = 0.0001d;
+        private const int GdalMaskAllValid = 0x01;
+        private const int StretchCacheVersion = 4;
         private static readonly ConcurrentDictionary<string, StretchParameters> StretchCache = new();
 
         public static RasterRendererType DetermineRendererType(Dataset ds, int bandCount)
@@ -187,27 +191,44 @@ namespace GeoVision.Services
 
                 int totalSamples = sampleW * sampleH;
                 var buf = new float[totalSamples];
+                Gdal.SetThreadLocalConfigOption("GDAL_RASTERIO_RESAMPLING", "NEAREST");
                 band.ReadRaster(0, 0, band.XSize, band.YSize, buf, sampleW, sampleH, 0, 0);
+                byte[]? validMask = ReadValidityMask(band, sampleW, sampleH);
 
                 var values = new List<float>(Math.Min(totalSamples, MaxStoredSamples));
                 double sum = 0;
                 int validCount = 0;
                 int zeroCount = 0;
+                int candidateCount = 0;
 
-                foreach (float v in buf)
+                for (int i = 0; i < buf.Length; i++)
                 {
+                    if (validMask != null && validMask[i] == 0) continue;
+                    float v = buf[i];
                     if (float.IsNaN(v) || float.IsInfinity(v)) continue;
                     if (hasNoData[b] && Math.Abs(v - ndv) < 0.0001) continue;
+                    candidateCount++;
                     if (Math.Abs(v) < 0.0001) zeroCount++;
                 }
 
-                bool treatZeroAsBackground = !hasNoData[b] && zeroCount > totalSamples * 0.02;
+                bool treatZeroAsBackground = !hasNoData[b] &&
+                    candidateCount > 0 &&
+                    zeroCount > candidateCount * BackgroundDetectionRatio;
+                double backgroundTolerance = treatZeroAsBackground
+                    ? CalculateBackgroundTolerance(bandMin, bandMax)
+                    : 0d;
 
-                foreach (float v in buf)
+                for (int i = 0; i < buf.Length; i++)
                 {
+                    if (validMask != null && validMask[i] == 0) continue;
+                    float v = buf[i];
                     if (float.IsNaN(v) || float.IsInfinity(v)) continue;
                     if (hasNoData[b] && Math.Abs(v - ndv) < 0.0001) continue;
-                    if (treatZeroAsBackground && Math.Abs(v) < 0.0001) continue;
+                    // Resampled overviews and fusion results often contain a thin halo of
+                    // near-zero values around a large zero background. Treat the halo as
+                    // background too, otherwise a 0.5% clip can land inside it and give
+                    // every RGB channel a different, invalid lower bound.
+                    if (treatZeroAsBackground && Math.Abs(v) <= backgroundTolerance) continue;
                     sum += v;
                     validCount++;
                     values.Add(v);
@@ -350,21 +371,68 @@ namespace GeoVision.Services
 
         private static Band? SelectStatisticsBand(Band sourceBand, double fullMin, double fullMax, out int sampleW, out int sampleH)
         {
-            if (sourceBand.GetOverviewCount() > 0)
+            Band selectedBand = sourceBand;
+            int selectedMaxDim = Math.Max(sourceBand.XSize, sourceBand.YSize);
+            int selectedDistance = Math.Abs(selectedMaxDim - MaxAnalysisSampleDim);
+            int overviewCount = sourceBand.GetOverviewCount();
+
+            for (int i = 0; i < overviewCount; i++)
             {
-                var overview = sourceBand.GetOverview(0);
-                if (overview != null && IsBandRangeCompatible(overview, fullMin, fullMax))
-                {
-                    sampleW = overview.XSize;
-                    sampleH = overview.YSize;
-                    return overview;
-                }
+                var overview = sourceBand.GetOverview(i);
+                if (overview == null || !IsBandRangeCompatible(overview, fullMin, fullMax))
+                    continue;
+
+                int overviewMaxDim = Math.Max(overview.XSize, overview.YSize);
+                int overviewDistance = Math.Abs(overviewMaxDim - MaxAnalysisSampleDim);
+                if (overviewDistance >= selectedDistance)
+                    continue;
+
+                selectedBand = overview;
+                selectedMaxDim = overviewMaxDim;
+                selectedDistance = overviewDistance;
             }
 
-            double scale = Math.Min(1d, MaxAnalysisSampleDim / (double)Math.Max(sourceBand.XSize, sourceBand.YSize));
-            sampleW = Math.Max(1, (int)Math.Round(sourceBand.XSize * scale));
-            sampleH = Math.Max(1, (int)Math.Round(sourceBand.YSize * scale));
-            return sourceBand;
+            double scale = Math.Min(1d, MaxAnalysisSampleDim / (double)selectedMaxDim);
+            sampleW = Math.Max(1, (int)Math.Round(selectedBand.XSize * scale));
+            sampleH = Math.Max(1, (int)Math.Round(selectedBand.YSize * scale));
+            return selectedBand;
+        }
+
+        private static byte[]? ReadValidityMask(Band band, int sampleW, int sampleH)
+        {
+            try
+            {
+                if ((band.GetMaskFlags() & GdalMaskAllValid) != 0)
+                    return null;
+
+                var maskBand = band.GetMaskBand();
+                if (maskBand == null)
+                    return null;
+
+                var mask = new byte[sampleW * sampleH];
+                Gdal.SetThreadLocalConfigOption("GDAL_RASTERIO_RESAMPLING", "NEAREST");
+                maskBand.ReadRaster(
+                    0, 0, maskBand.XSize, maskBand.YSize,
+                    mask, sampleW, sampleH, 0, 0);
+                return mask;
+            }
+            catch
+            {
+                // Statistics can still be computed from NoData and finite-value checks
+                // when a driver does not expose its mask through GDAL.
+                return null;
+            }
+        }
+
+        private static double CalculateBackgroundTolerance(double bandMin, double bandMax)
+        {
+            double magnitude = Math.Max(Math.Abs(bandMin), Math.Abs(bandMax));
+            if (double.IsNaN(magnitude) || double.IsInfinity(magnitude))
+                magnitude = 0d;
+
+            return Math.Max(
+                MinimumBackgroundTolerance,
+                magnitude * BackgroundRelativeTolerance);
         }
 
         private static bool IsBandRangeCompatible(Band band, double fullMin, double fullMax)
@@ -531,7 +599,8 @@ namespace GeoVision.Services
                         cache = new PersistentStretchCache();
                     }
 
-                    if (cache.SourceLength != sourceLength ||
+                    if (cache.Version != StretchCacheVersion ||
+                        cache.SourceLength != sourceLength ||
                         cache.SourceModifiedUtcTicks != sourceModifiedUtcTicks)
                     {
                         cache.Entries.Clear();
@@ -808,7 +877,9 @@ namespace GeoVision.Services
         private static void SetGdalResampling(int bufW, int bufH, int xSize, int ySize, bool forceNearest = false)
         {
             bool oneToOne = bufW == xSize && bufH == ySize;
-            Gdal.SetConfigOption("GDAL_RASTERIO_RESAMPLING", forceNearest || oneToOne ? "NEAREST" : "BILINEAR");
+            Gdal.SetThreadLocalConfigOption(
+                "GDAL_RASTERIO_RESAMPLING",
+                forceNearest || oneToOne ? "NEAREST" : "BILINEAR");
         }
 
         private static byte[] RenderRgbToRgba(Dataset ds, int[] sourceBandIndexes,
@@ -823,30 +894,21 @@ namespace GeoVision.Services
 
             SetGdalResampling(bufW, bufH, xSize, ySize);
 
-            var allData = new float[total * displayBands];
+            int renderBands = Math.Min(displayBands, 4);
+            var allData = new float[total * renderBands];
             var isNoDataPixel = new bool[total];
-
-            for (int b = 0; b < displayBands; b++)
-            {
-                var band = GetRequiredBand(ds, sourceBandIndexes[b]);
-                var buf = new float[total];
-                band.ReadRaster(xOff, yOff, xSize, ySize, buf, bufW, bufH, 0, 0);
-
-                bool hasNd = b < stretch.HasNoData.Length && stretch.HasNoData[b];
-                double ndv = b < stretch.NoDataValues.Length ? stretch.NoDataValues[b] : 0;
-
-                for (int i = 0; i < total; i++)
-                {
-                    allData[i * displayBands + b] = buf[i];
-                    if (b == 0 && IsNoDataValue(buf[i], hasNd, ndv))
-                        isNoDataPixel[i] = true;
-                }
-            }
-
             var rgba = new byte[total * 4];
             bool isHistEq = stretch.Type == StretchType.HistEq;
 
-            for (int ch = 0; ch < displayBands && ch < 4; ch++)
+            int[] bandMap = sourceBandIndexes.Take(renderBands).ToArray();
+            var readResult = ds.ReadRaster(
+                xOff, yOff, xSize, ySize,
+                allData, bufW, bufH, renderBands, bandMap,
+                sizeof(float), sizeof(float) * bufW, sizeof(float) * total);
+            if (readResult != CPLErr.CE_None)
+                throw new IOException($"GDAL RasterIO failed with code {readResult}.");
+
+            for (int ch = 0; ch < renderBands; ch++)
             {
                 float lo = stretch.Lo.Length > ch ? stretch.Lo[ch] : 0;
                 float hi = stretch.Hi.Length > ch ? stretch.Hi[ch] : 1;
@@ -860,9 +922,13 @@ namespace GeoVision.Services
 
                 for (int i = 0; i < total; i++)
                 {
-                    float v = allData[i * displayBands + ch];
+                    float v = allData[ch * total + i];
                     if (IsNoDataValue(v, hasNd, ndv))
+                    {
+                        if (ch == 0)
+                            isNoDataPixel[i] = true;
                         continue;
+                    }
 
                     rgba[i * 4 + ch] = isHistEq && cdf.Length > 0
                         ? ApplyHistEq(v, cdf, lo, range)

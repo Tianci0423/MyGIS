@@ -6,7 +6,7 @@
         Background="#F8F8F8">
     <Window.Resources>
         <DataTemplate x:Key="RampTemplate">
-            <Border Height="20" Width="200" HorizontalAlignment="Stretch"
+            <Border Height="20" HorizontalAlignment="Stretch"
                     CornerRadius="2" Margin="2,1">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -25,15 +25,15 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- 拉伸 -->
         <GroupBox Grid.Row="0" Header="拉伸" Padding="10" Margin="0,0,0,10">
             <ComboBox x:Name="StretchCombo" SelectedIndex="0">
-                <ComboBoxItem Content="百分比截断" Tag="PercentClip"/>
+                <ComboBoxItem Content="百分比截断 (两端各 0.5%)" Tag="PercentClip"/>
                 <ComboBoxItem Content="无" Tag="None"/>
                 <ComboBoxItem Content="标准差 (2σ)" Tag="StdDev"/>
                 <ComboBoxItem Content="直方图均衡化" Tag="HistEq"/>
@@ -45,7 +45,15 @@
         <!-- 色带 (仅单波段) -->
         <GroupBox x:Name="ColorRampGroup" Grid.Row="1" Header="色带" Padding="10" Margin="0,0,0,10">
             <ComboBox x:Name="ColorRampCombo" SelectedIndex="0" MaxDropDownHeight="320"
-                      ItemTemplate="{StaticResource RampTemplate}"/>
+                      HorizontalContentAlignment="Stretch"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      ItemTemplate="{StaticResource RampTemplate}">
+                <ComboBox.ItemContainerStyle>
+                    <Style TargetType="ComboBoxItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    </Style>
+                </ComboBox.ItemContainerStyle>
+            </ComboBox>
         </GroupBox>
 
         <!-- RGB 合成 -->
@@ -79,13 +87,18 @@
         </GroupBox>
 
         <GroupBox Grid.Row="3" Header="透明度" Padding="10" Margin="0,0,0,10">
-            <DockPanel>
-                <TextBlock DockPanel.Dock="Right" Width="42" TextAlignment="Right"
-                           VerticalAlignment="Center"
-                           Text="{Binding ElementName=OpacitySlider, Path=Value, StringFormat={}{0:F0}%}"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
                 <Slider x:Name="OpacitySlider" Minimum="0" Maximum="100" Value="100"
-                        TickFrequency="1" IsSnapToTickEnabled="True"/>
-            </DockPanel>
+                        TickFrequency="1" IsSnapToTickEnabled="True"
+                        VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" Width="42" Margin="8,0,0,0"
+                           TextAlignment="Right" VerticalAlignment="Center"
+                           Text="{Binding ElementName=OpacitySlider, Path=Value, StringFormat={}{0:F0}%}"/>
+            </Grid>
         </GroupBox>
 
         <!-- 按钮 -->

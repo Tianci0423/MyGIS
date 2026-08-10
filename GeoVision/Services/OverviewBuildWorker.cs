@@ -9,6 +9,8 @@ namespace GeoVision.Services
     {
         internal const string Command = "--geovision-build-overview";
         private const string Resampling = "AVERAGE";
+        private static readonly object ProgressWriteLock = new();
+        private static int _lastWrittenProgress = -1;
 
         internal static bool IsWorkerCommand(string[] args)
             => args.Length == 5 && string.Equals(args[0], Command, StringComparison.Ordinal);
@@ -37,13 +39,13 @@ namespace GeoVision.Services
 
                 using var source = OpenRequired(sourcePath);
                 var levels = CreateOverviewLevels(source.RasterXSize, source.RasterYSize);
-                CreateTemporaryVrt(source, tempVrtPath);
+                CreateTemporaryVrt(source, tempVrtPath, progressPath);
 
                 using (var vrt = OpenRequired(tempVrtPath))
                 {
                     Gdal.GDALProgressFuncDelegate callback = (complete, message, data) =>
                     {
-                        int percent = 2 + (int)Math.Round(Math.Clamp(complete, 0d, 1d) * 94d);
+                        int percent = 3 + (int)Math.Round(Math.Clamp(complete, 0d, 1d) * 93d);
                         WriteProgress(progressPath, percent);
                         return 1;
                     };
@@ -90,17 +92,27 @@ namespace GeoVision.Services
             }
         }
 
-        private static void CreateTemporaryVrt(Dataset source, string tempVrtPath)
+        private static void CreateTemporaryVrt(Dataset source, string tempVrtPath, string progressPath)
         {
             var driver = Gdal.GetDriverByName("VRT")
                 ?? throw new InvalidOperationException("GDAL VRT driver is unavailable.");
+
+            // VRT is just an XML wrapper (no pixel data) — it completes almost instantly.
+            // Allocate only 1→3 (2% range) so the heavy BuildOverviews phase gets the rest.
+            Gdal.GDALProgressFuncDelegate vrtCallback = (complete, message, data) =>
+            {
+                int percent = 1 + (int)Math.Round(Math.Clamp(complete, 0d, 1d) * 2d);
+                WriteProgress(progressPath, percent);
+                return 1;
+            };
+
             using var vrt = driver.CreateCopy(
                 tempVrtPath,
                 source,
                 0,
                 Array.Empty<string>(),
-                null,
-                null);
+                vrtCallback,
+                "GeoVisionVrtCreation");
             if (vrt == null)
                 throw new IOException("Could not create temporary VRT dataset.");
         }
@@ -160,9 +172,17 @@ namespace GeoVision.Services
 
         private static void WriteProgress(string path, int percent)
         {
-            string tempPath = path + ".tmp";
-            File.WriteAllText(tempPath, percent.ToString(CultureInfo.InvariantCulture));
-            File.Move(tempPath, path, true);
+            lock (ProgressWriteLock)
+            {
+                percent = Math.Clamp(percent, 0, 100);
+                if (percent <= _lastWrittenProgress)
+                    return;
+
+                string tempPath = path + ".tmp";
+                File.WriteAllText(tempPath, percent.ToString(CultureInfo.InvariantCulture));
+                File.Move(tempPath, path, true);
+                _lastWrittenProgress = percent;
+            }
         }
 
         private static void TryWriteError(string path, string message)

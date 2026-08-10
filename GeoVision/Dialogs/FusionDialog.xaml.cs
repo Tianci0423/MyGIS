@@ -17,6 +17,8 @@ namespace GeoVision.Dialogs
     {
         private const int OutputBandCount = 4;
         private const int OutputBytesPerSample = 4; // Fusion model writes float32.
+        // Empirical scale used to train bestGF7-gate.pth. Runtime inference
+        // estimates the input product's scale relative to this GF7 domain.
         internal const double DefaultFloatScale = 2047d;
         private const double RecommendedSpaceMultiplier = 1.20;
         private const long RecommendedSpacePaddingBytes = 512L * 1024L * 1024L;
@@ -115,7 +117,14 @@ namespace GeoVision.Dialogs
             startInfo.ArgumentList.Add("--save_path");
             startInfo.ArgumentList.Add(outputFullPath);
             startInfo.ArgumentList.Add("--float_scale");
-            startInfo.ArgumentList.Add(request.FloatScale.ToString(CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add(
+                (request.FloatScale ?? DefaultFloatScale).ToString(CultureInfo.InvariantCulture));
+            if (!request.FloatScale.HasValue)
+                startInfo.ArgumentList.Add("--auto_float_scale");
+            startInfo.ArgumentList.Add("--norm_mode");
+            startInfo.ArgumentList.Add("scale");
+            // Training used direct MS/PAN division only; keep inference aligned.
+            startInfo.ArgumentList.Add("--no_match_pan_to_ms");
             startInfo.ArgumentList.Add("--overlap");
             startInfo.ArgumentList.Add(request.Overlap.ToString(CultureInfo.InvariantCulture));
             if (request.NoCuda) startInfo.ArgumentList.Add("--no_cuda");
@@ -268,6 +277,29 @@ namespace GeoVision.Dialogs
                 output = Path.Combine(dir, $"{name}_fused.tif");
             }
 
+            double? floatScale = null;
+            string floatScaleText = FloatScaleBox.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(floatScaleText))
+            {
+                bool parsed = double.TryParse(
+                                  floatScaleText,
+                                  NumberStyles.Float,
+                                  CultureInfo.CurrentCulture,
+                                  out double value) ||
+                              double.TryParse(
+                                  floatScaleText,
+                                  NumberStyles.Float,
+                                  CultureInfo.InvariantCulture,
+                                  out value);
+                if (!parsed || !double.IsFinite(value) || value <= 0)
+                {
+                    MessageBox.Show("float_scale 必须是大于 0 的有效数字；留空则自动估算。", "提示",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
+                floatScale = value;
+            }
+
             if (!ValidateFusionInputs(ms, pan))
                 return false;
 
@@ -278,7 +310,7 @@ namespace GeoVision.Dialogs
                 ms,
                 pan,
                 output,
-                DefaultFloatScale,
+                floatScale,
                 32,
                 false,
                 false,
@@ -504,7 +536,7 @@ namespace GeoVision.Dialogs
         string MsPath,
         string PanPath,
         string OutputPath,
-        double FloatScale,
+        double? FloatScale,
         int Overlap,
         bool NoCuda,
         bool Fp16,

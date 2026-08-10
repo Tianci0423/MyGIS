@@ -370,9 +370,71 @@ namespace GeoVision.Dialogs
                     KeepBlackBorderBox.IsChecked == true));
             }
 
+            if (!ConfirmBatchDiskSpace(requests))
+                return;
+
             Requests = requests;
             ContinueOnError = ContinueOnErrorBox.IsChecked == true;
             DialogResult = true;
+        }
+
+        private bool ConfirmBatchDiskSpace(IReadOnlyList<RegistrationRequest> requests)
+        {
+            try
+            {
+                var requirements = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                foreach (RegistrationRequest request in requests)
+                {
+                    DriveInfo drive = RegistrationDialog.GetOutputDrive(request.OutMsPath);
+                    long taskBytes = RegistrationDialog.EstimateRecommendedOutputBytes(request);
+                    requirements[drive.Name] = AddSaturating(
+                        requirements.GetValueOrDefault(drive.Name),
+                        taskBytes);
+                }
+
+                var insufficient = new List<string>();
+                foreach ((string root, long requiredBytes) in requirements)
+                {
+                    var drive = new DriveInfo(root);
+                    if (drive.AvailableFreeSpace < requiredBytes)
+                    {
+                        insufficient.Add(
+                            $"{drive.Name}  需要约 {RegistrationDialog.FormatBytes(requiredBytes)}，" +
+                            $"当前可用 {RegistrationDialog.FormatBytes(drive.AvailableFreeSpace)}");
+                    }
+                }
+
+                if (insufficient.Count == 0)
+                    return true;
+
+                MessageBox.Show(
+                    this,
+                    "批量配准所需磁盘空间不足，任务尚未开始。\n\n" +
+                    string.Join("\n", insufficient) +
+                    "\n\n请清理目标盘，或把任务输出目录改到空间更大的磁盘。" +
+                    "\n空间估算包含 RPC 正射外包矩形和 GeoTIFF 块边界余量，避免处理中途写满磁盘。",
+                    "输出空间不足",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    this,
+                    $"无法估算批量配准输出空间：\n{ex.Message}\n\n任务尚未开始，请检查输入影像和输出目录。",
+                    "空间检查失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return false;
+            }
+        }
+
+        private static long AddSaturating(long left, long right)
+        {
+            if (left >= long.MaxValue - right)
+                return long.MaxValue;
+            return left + right;
         }
 
         private void OnCancelClick(object sender, RoutedEventArgs e)

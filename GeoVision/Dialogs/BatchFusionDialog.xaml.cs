@@ -358,7 +358,7 @@ namespace GeoVision.Dialogs
                     task.MsPath,
                     task.PanPath,
                     output,
-                    FusionDialog.DefaultFloatScale,
+                    null,
                     32,
                     false,
                     false,

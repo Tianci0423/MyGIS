@@ -146,7 +146,17 @@ namespace GeoVision.Services
             progress?.Report((98, $"正在创建图层 {fileName}"));
             var provider = new GdalRasterProvider(filePath, stretch, rendererType, sourceBandIndexes);
 
-            LastDiagnostic += $" overviews={provider.OverviewCount}";
+            string ovrPath = filePath + ".ovr";
+            bool hasExternalOvr = File.Exists(ovrPath);
+            string overviewDetail;
+            if (provider.OverviewCount == 0)
+                overviewDetail = "overviews=none";
+            else if (hasExternalOvr)
+                overviewDetail = $"overviews={provider.OverviewCount}(ext .ovr)";
+            else
+                overviewDetail = $"overviews={provider.OverviewCount}(internal)";
+
+            LastDiagnostic += $" {overviewDetail}";
 
             var layer = new Layer(Path.GetFileName(filePath))
             {

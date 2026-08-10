@@ -76,7 +76,7 @@
         </Grid>
 
         <Border Grid.Row="5" Background="#EEF2F7" BorderBrush="#CBD5E1" BorderThickness="1" Padding="10" CornerRadius="4" Margin="0,0,0,8">
-            <TextBlock Text="输出会裁剪到 MS/PAN 的共同覆盖区：MS 重采样到 PAN 网格，PAN 同步裁剪，二者宽高、坐标系和 transform 完全一致。"
+            <TextBlock Text="输出会裁剪到 MS/PAN 的共同覆盖区：MS 重采样到 PAN 网格，PAN 同步裁剪，二者宽高、坐标系和 transform 完全一致。双方无坐标系时，严格整数倍产品使用快速像素网格配准，其余有效 RPC/RPB 产品使用通用 RPC 正射配准。"
                        Foreground="#475569" TextWrapping="Wrap"/>
         </Border>
 

@@ -18,6 +18,9 @@ namespace GeoVision.Dialogs
         private static readonly Regex RegistrationProgressRegex = new(
             @"\b(?:GPU\s+progress|Progress):\s*(?<percent>\d+(?:\.\d+)?)%",
             RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private const double StandardGridSpaceMultiplier = 1.15;
+        private const double GeneralRpcSpaceMultiplier = 1.70;
+        private const long OutputSpacePaddingBytes = 512L * 1024 * 1024;
 
         public RegistrationRequest? Request { get; private set; }
 
@@ -83,6 +86,45 @@ namespace GeoVision.Dialogs
                    a.Bottom < b.Top && a.Top > b.Bottom;
         }
 
+        private static bool HasRpcMetadata(Dataset ds)
+        {
+            try
+            {
+                string[] metadata = ds.GetMetadata("RPC") ?? Array.Empty<string>();
+                return metadata.Any(item => item.StartsWith("LINE_OFF=", StringComparison.OrdinalIgnoreCase)) &&
+                       metadata.Any(item => item.StartsWith("SAMP_OFF=", StringComparison.OrdinalIgnoreCase)) &&
+                       metadata.Any(item => item.StartsWith("LINE_NUM_COEFF=", StringComparison.OrdinalIgnoreCase)) &&
+                       metadata.Any(item => item.StartsWith("SAMP_NUM_COEFF=", StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryGetRpcPixelGridRatio(Dataset msDs, Dataset panDs, out int ratio)
+        {
+            ratio = 0;
+            if (!string.IsNullOrWhiteSpace(ReadCrs(msDs)) ||
+                !string.IsNullOrWhiteSpace(ReadCrs(panDs)) ||
+                !HasRpcMetadata(msDs) ||
+                !HasRpcMetadata(panDs) ||
+                msDs.RasterXSize <= 0 || msDs.RasterYSize <= 0 ||
+                panDs.RasterXSize % msDs.RasterXSize != 0 ||
+                panDs.RasterYSize % msDs.RasterYSize != 0)
+            {
+                return false;
+            }
+
+            int ratioX = panDs.RasterXSize / msDs.RasterXSize;
+            int ratioY = panDs.RasterYSize / msDs.RasterYSize;
+            if (ratioX < 1 || ratioX != ratioY)
+                return false;
+
+            ratio = ratioX;
+            return true;
+        }
+
         internal static bool ValidateRegistrationInputs(string ms, string pan, bool showMessages)
         {
             try
@@ -110,7 +152,18 @@ namespace GeoVision.Dialogs
                 string crsPan = ReadCrs(panDs);
                 if (string.IsNullOrWhiteSpace(crsMs) || string.IsNullOrWhiteSpace(crsPan))
                 {
-                    if (showMessages) MessageBox.Show("MS 和 PAN 都必须包含坐标系/地理标签，才能生成融合输入。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    if (string.IsNullOrWhiteSpace(crsMs) &&
+                        string.IsNullOrWhiteSpace(crsPan) &&
+                        HasRpcMetadata(msDs) &&
+                        HasRpcMetadata(panDs))
+                    {
+                        return true;
+                    }
+
+                    if (showMessages)
+                        MessageBox.Show(
+                            "MS/PAN 缺少坐标系。双方必须都包含有效 RPC/RPB，才能进行像素网格配准或通用 RPC 正射配准。",
+                            "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -189,17 +242,45 @@ namespace GeoVision.Dialogs
                 // CRS check
                 bool msHasCrs = !string.IsNullOrWhiteSpace(crsMs);
                 bool panHasCrs = !string.IsNullOrWhiteSpace(crsPan);
-                ValCrsCheck.Text = msHasCrs && panHasCrs
-                    ? (crsMatch ? "✓ 坐标系一致" : $"⚠ 坐标系不一致，将重投影到 PAN 坐标系 (MS: {crsLabelMs}, PAN: {crsLabelPan})")
-                    : $"✗ 缺少地理标签 (MS: {crsLabelMs}, PAN: {crsLabelPan})";
-                ValCrsCheck.Foreground = msHasCrs && panHasCrs && crsMatch
-                    ? System.Windows.Media.Brushes.Green
-                    : msHasCrs && panHasCrs
-                        ? System.Windows.Media.Brushes.DarkOrange
-                        : System.Windows.Media.Brushes.Red;
+                int rpcPixelRatio = 0;
+                bool rpcPixelGridReady = !msHasCrs && !panHasCrs &&
+                                         TryGetRpcPixelGridRatio(msDs, panDs, out rpcPixelRatio);
+                bool generalRpcReady = !msHasCrs && !panHasCrs && !rpcPixelGridReady &&
+                                       HasRpcMetadata(msDs) && HasRpcMetadata(panDs);
+                if (rpcPixelGridReady)
+                {
+                    ValCrsCheck.Text = $"✓ 缺少坐标系，但检测到双方 RPC/RPB 和严格 {rpcPixelRatio}× 像素网格";
+                    ValCrsCheck.Foreground = System.Windows.Media.Brushes.Green;
+                }
+                else if (generalRpcReady)
+                {
+                    ValCrsCheck.Text = "✓ 缺少坐标系，但双方均包含 RPC/RPB，将使用通用 RPC 正射配准";
+                    ValCrsCheck.Foreground = System.Windows.Media.Brushes.Green;
+                }
+                else
+                {
+                    ValCrsCheck.Text = msHasCrs && panHasCrs
+                        ? (crsMatch ? "✓ 坐标系一致" : $"⚠ 坐标系不一致，将重投影到 PAN 坐标系 (MS: {crsLabelMs}, PAN: {crsLabelPan})")
+                        : $"✗ 缺少地理标签 (MS: {crsLabelMs}, PAN: {crsLabelPan})";
+                    ValCrsCheck.Foreground = msHasCrs && panHasCrs && crsMatch
+                        ? System.Windows.Media.Brushes.Green
+                        : msHasCrs && panHasCrs
+                            ? System.Windows.Media.Brushes.DarkOrange
+                            : System.Windows.Media.Brushes.Red;
+                }
 
                 // Overlap check
-                if (crsMatch)
+                if (rpcPixelGridReady)
+                {
+                    ValOverlapCheck.Text = $"✓ 将按 RPC 一致的 {rpcPixelRatio}× 像素关系把 MS 重采样到 PAN 网格；运行时会继续校验 RPC 系数";
+                    ValOverlapCheck.Foreground = System.Windows.Media.Brushes.Green;
+                }
+                else if (generalRpcReady)
+                {
+                    ValOverlapCheck.Text = "✓ 将根据双方各自 RPC 投影到 PAN 分辨率的共同地图网格，并裁剪共同有效区";
+                    ValOverlapCheck.Foreground = System.Windows.Media.Brushes.Green;
+                }
+                else if (crsMatch)
                 {
                     ValOverlapCheck.Text = hasOverlap
                         ? "✓ 地理范围有重叠，将裁剪为共同覆盖区"
@@ -246,12 +327,106 @@ namespace GeoVision.Dialogs
             return Path.Combine(baseDir, "python_env", "runtime", "register.py");
         }
 
+        internal static long EstimateRecommendedOutputBytes(RegistrationRequest request)
+        {
+            using var msDs = Gdal.Open(request.MsPath, Access.GA_ReadOnly);
+            using var panDs = Gdal.Open(request.PanPath, Access.GA_ReadOnly);
+            if (msDs == null || panDs == null)
+                throw new InvalidDataException("GDAL 无法打开 MS/PAN 输入影像，不能估算配准输出空间。");
+
+            int msBytesPerSample = GetDataTypeBytes(msDs.GetRasterBand(1).DataType);
+            int panBytesPerSample = GetDataTypeBytes(panDs.GetRasterBand(1).DataType);
+            double bytesPerTargetPixel =
+                (double)msDs.RasterCount * msBytesPerSample +
+                (double)panDs.RasterCount * panBytesPerSample;
+
+            bool generalRpcOrtho =
+                string.IsNullOrWhiteSpace(ReadCrs(msDs)) &&
+                string.IsNullOrWhiteSpace(ReadCrs(panDs)) &&
+                HasRpcMetadata(msDs) &&
+                HasRpcMetadata(panDs) &&
+                !TryGetRpcPixelGridRatio(msDs, panDs, out _);
+
+            // 通用 RPC 正射会先生成北向上的外包矩形，面积通常大于原始 PAN。
+            // 其余路径的共同覆盖区不会明显超过 PAN 网格，仅保留少量 TIFF/块边界余量。
+            double areaMultiplier = generalRpcOrtho
+                ? GeneralRpcSpaceMultiplier
+                : StandardGridSpaceMultiplier;
+
+            double estimated =
+                (double)panDs.RasterXSize *
+                panDs.RasterYSize *
+                bytesPerTargetPixel *
+                areaMultiplier +
+                OutputSpacePaddingBytes;
+
+            return estimated >= long.MaxValue
+                ? long.MaxValue
+                : (long)Math.Ceiling(estimated);
+        }
+
+        internal static DriveInfo GetOutputDrive(string outputPath)
+        {
+            string fullPath = Path.GetFullPath(outputPath);
+            string? root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrWhiteSpace(root))
+                throw new InvalidOperationException($"无法识别输出路径所在磁盘：{outputPath}");
+
+            return new DriveInfo(root);
+        }
+
+        internal static string FormatBytes(long bytes)
+        {
+            string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
+            double value = Math.Max(0, bytes);
+            int unit = 0;
+            while (value >= 1024 && unit < units.Length - 1)
+            {
+                value /= 1024;
+                unit++;
+            }
+
+            return $"{value:F1} {units[unit]}";
+        }
+
+        private static int GetDataTypeBytes(DataType dataType)
+        {
+            return dataType switch
+            {
+                DataType.GDT_Byte or DataType.GDT_Int8 => 1,
+                DataType.GDT_UInt16 or DataType.GDT_Int16 or DataType.GDT_Float16 => 2,
+                DataType.GDT_UInt32 or DataType.GDT_Int32 or DataType.GDT_Float32 or
+                    DataType.GDT_CInt16 => 4,
+                DataType.GDT_UInt64 or DataType.GDT_Int64 or DataType.GDT_Float64 or
+                    DataType.GDT_CInt32 or DataType.GDT_CFloat32 => 8,
+                DataType.GDT_CFloat64 => 16,
+                _ => 8
+            };
+        }
+
+        private static void EnsureOutputDiskSpace(RegistrationRequest request)
+        {
+            long recommendedBytes = EstimateRecommendedOutputBytes(request);
+            DriveInfo drive = GetOutputDrive(request.OutMsPath);
+            long freeBytes = drive.AvailableFreeSpace;
+            if (freeBytes >= recommendedBytes)
+                return;
+
+            throw new IOException(
+                $"输出盘 {drive.Name} 空间不足，已在配准开始前停止。\n\n" +
+                $"本任务建议预留：{FormatBytes(recommendedBytes)}\n" +
+                $"当前可用空间：{FormatBytes(freeBytes)}\n" +
+                $"输出目录：{Path.GetDirectoryName(request.OutMsPath)}\n\n" +
+                "请清理磁盘空间，或把输出目录改到空间更大的磁盘后重试。");
+        }
+
         public static async Task RunRegistrationAsync(
             RegistrationRequest request,
             Action<Process>? onProcessCreated = null,
             IProgress<int>? progress = null)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(request.OutMsPath)!);
+            EnsureOutputDiskSpace(request);
 
             string scriptDir = Path.GetDirectoryName(request.ScriptPath) ?? Environment.CurrentDirectory;
             var startInfo = new ProcessStartInfo
@@ -294,12 +469,48 @@ namespace GeoVision.Dialogs
             await process.WaitForExitAsync();
 
             if (process.ExitCode != 0)
+            {
+                string processOutput = output.ToString();
+                if (IsDiskFullMessage(processOutput))
+                {
+                    DeleteIncompleteOutput(request.OutMsPath);
+                    DeleteIncompleteOutput(request.OutPanPath);
+                    DriveInfo drive = GetOutputDrive(request.OutMsPath);
+                    throw new IOException(
+                        $"输出盘 {drive.Name} 空间不足，配准结果写入失败；未完成的输出已清理。\n\n" +
+                        $"当前可用空间：{FormatBytes(drive.AvailableFreeSpace)}\n" +
+                        $"输出目录：{Path.GetDirectoryName(request.OutMsPath)}\n\n" +
+                        "请清理磁盘空间，或更换输出目录后重试。");
+                }
+
                 throw new InvalidOperationException(output.Length == 0
                     ? $"配准失败，退出码 {process.ExitCode}。"
-                    : output.ToString());
+                    : processOutput);
+            }
 
             if (!File.Exists(request.OutMsPath) || !File.Exists(request.OutPanPath))
                 throw new FileNotFoundException("配准进程结束，但没有生成所有输出文件。");
+        }
+
+        private static bool IsDiskFullMessage(string message)
+        {
+            return message.Contains("No space left on device", StringComparison.OrdinalIgnoreCase) ||
+                   message.Contains("There is not enough space", StringComparison.OrdinalIgnoreCase) ||
+                   message.Contains("not enough space on the disk", StringComparison.OrdinalIgnoreCase) ||
+                   message.Contains("磁盘空间不足", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void DeleteIncompleteOutput(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // 清理失败不覆盖真正的配准错误。
+            }
         }
 
         private static void AppendProcessLine(

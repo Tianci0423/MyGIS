@@ -6,54 +6,62 @@
         xmlns:mapsui="clr-namespace:Mapsui.UI.Wpf;assembly=Mapsui.UI.Wpf"
         xmlns:controls="clr-namespace:GeoVision.Controls"
         mc:Ignorable="d"
-        Title="GeoVision" Height="760" Width="1220" MinHeight="620" MinWidth="980"
+        Title="GeoVision · Desktop GIS" Height="800" Width="1280" MinHeight="660" MinWidth="1040"
         Icon="Assets/GeoVision.ico"
-        Background="#EEF2F6" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource GisCanvasBrush}" WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI, Microsoft YaHei UI">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
-        <SolidColorBrush x:Key="ChromeBg" Color="#F7FAFC"/>
-        <SolidColorBrush x:Key="PanelBg" Color="#F8FAFC"/>
-        <SolidColorBrush x:Key="BorderSoft" Color="#D9E2EC"/>
-        <SolidColorBrush x:Key="TextMain" Color="#253243"/>
-        <SolidColorBrush x:Key="TextMuted" Color="#65758B"/>
-        <SolidColorBrush x:Key="Accent" Color="#2563EB"/>
-        <SolidColorBrush x:Key="AccentSoft" Color="#E7F0FF"/>
+        <SolidColorBrush x:Key="ChromeBg" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="PanelBg" Color="#F6F8FA"/>
+        <SolidColorBrush x:Key="BorderSoft" Color="#C9D3DC"/>
+        <SolidColorBrush x:Key="TextMain" Color="#1D2C38"/>
+        <SolidColorBrush x:Key="TextMuted" Color="#607382"/>
+        <SolidColorBrush x:Key="Accent" Color="#1677A8"/>
+        <SolidColorBrush x:Key="AccentSoft" Color="#E7F2F7"/>
 
         <Style x:Key="TopMenuItem" TargetType="MenuItem">
-            <Setter Property="Height" Value="34"/>
-            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Padding" Value="14,0"/>
             <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Foreground" Value="{StaticResource TextMain}"/>
+            <Setter Property="Foreground" Value="#F4F8FB"/>
+            <Setter Property="Background" Value="Transparent"/>
         </Style>
 
         <Style x:Key="ToolButton" TargetType="Button">
-            <Setter Property="Width" Value="54"/>
-            <Setter Property="Height" Value="58"/>
+            <Setter Property="Width" Value="56"/>
+            <Setter Property="Height" Value="52"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
             <Setter Property="Margin" Value="1,0"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="bd" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7">
+                                CornerRadius="3">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#EDF4FF"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#BFD4FF"/>
+                                <Setter TargetName="bd" Property="Background" Value="#EDF3F6"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#D1DEE5"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#DCEAFF"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#8FB4FF"/>
+                                <Setter TargetName="bd" Property="Background" Value="#DDEAF0"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#A9C6D3"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#F0F5F7"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#B8CCD6"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -62,30 +70,40 @@
         </Style>
 
         <Style x:Key="ToolToggle" TargetType="ToggleButton">
-            <Setter Property="Width" Value="54"/>
-            <Setter Property="Height" Value="58"/>
+            <Setter Property="Width" Value="56"/>
+            <Setter Property="Height" Value="52"/>
             <Setter Property="Margin" Value="1,0"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
+                        <Grid>
+                            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="3">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <Border x:Name="SelectedBar" Height="3" Margin="7,0" CornerRadius="2,2,0,0"
+                                    Background="{StaticResource Accent}" VerticalAlignment="Bottom"
+                                    Visibility="Collapsed"/>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#EDF4FF"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#BFD4FF"/>
+                                <Setter TargetName="bd" Property="Background" Value="#EDF3F6"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#D1DEE5"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#DCEAFF"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#6EA0FF"/>
+                                <Setter TargetName="bd" Property="Background" Value="#E5F0F4"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="Transparent"/>
+                                <Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#B8CCD6"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -106,18 +124,27 @@
         </Style>
 
         <Style x:Key="ToolLabel" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Foreground" Value="#294155"/>
             <Setter Property="HorizontalAlignment" Value="Center"/>
-            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="Margin" Value="0,3,0,0"/>
+        </Style>
+
+        <Style x:Key="ToolGroupLabel" TargetType="TextBlock">
+            <Setter Property="Height" Value="15"/>
+            <Setter Property="FontSize" Value="9.5"/>
+            <Setter Property="Foreground" Value="#7B8E9B"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
         <Style x:Key="ToolSep" TargetType="Border">
             <Setter Property="Width" Value="1"/>
-            <Setter Property="Height" Value="36"/>
-            <Setter Property="Background" Value="#B8C2CE"/>
-            <Setter Property="Margin" Value="10,0"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Height" Value="52"/>
+            <Setter Property="Background" Value="#D3DCE2"/>
+            <Setter Property="Margin" Value="8,2,8,15"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
         </Style>
 
         <ControlTemplate x:Key="ExpandToggle" TargetType="ToggleButton">
@@ -135,12 +162,13 @@
         </ControlTemplate>
 
         <Style TargetType="TextBox" x:Key="SearchBox">
-            <Setter Property="Height" Value="30"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="MinHeight" Value="0"/>
             <Setter Property="Padding" Value="28,5,8,5"/>
             <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="Foreground" Value="{StaticResource TextMain}"/>
             <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#D6E0EA"/>
+            <Setter Property="BorderBrush" Value="#C5D1DA"/>
             <Setter Property="BorderThickness" Value="1"/>
         </Style>
     </Window.Resources>
@@ -153,35 +181,55 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <Menu Grid.Row="0" Height="34" Background="{StaticResource ChromeBg}"
-              BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1">
-            <MenuItem Header="文件" Style="{StaticResource TopMenuItem}">
-                <MenuItem Header="新建" Click="OnFileNew"/>
-                <Separator/>
-                <MenuItem Header="打开项目" Click="OnMenuOpen"/>
-                <MenuItem Header="保存项目" Click="OnMenuSave"/>
-                <MenuItem Header="另存为" Click="OnMenuSaveAs"/>
-                <MenuItem x:Name="RecentProjectsMenu" Header="最近打开"/>
-                <Separator/>
-                <MenuItem Header="添加数据" Click="OnAddDataClick"/>
-            </MenuItem>
-            <MenuItem Header="分析" Style="{StaticResource TopMenuItem}">
-                <MenuItem Header="波段计算器" Click="OnBandCalculator"/>
-                <MenuItem Header="影像裁剪" Click="OnRasterClip"/>
-            </MenuItem>
-            <MenuItem Header="工具" Style="{StaticResource TopMenuItem}">
-                <MenuItem Header="影像配准" Click="OnRegistration"/>
-                <MenuItem Header="批量影像配准" Click="OnBatchRegistration"/>
-                <Separator/>
-                <MenuItem Header="影像融合" Click="OnImageFusion"/>
-                <MenuItem Header="批量影像融合" Click="OnBatchImageFusion"/>
-            </MenuItem>
-        </Menu>
+        <Border Grid.Row="0" Height="40" Background="{StaticResource GisNavyBrush}">
+            <DockPanel LastChildFill="True">
+                <Menu Height="40" Background="Transparent" Foreground="White">
+                    <Menu.Resources>
+                        <Style TargetType="MenuItem">
+                            <Setter Property="Foreground" Value="{StaticResource TextMain}"/>
+                            <Setter Property="FontSize" Value="12.5"/>
+                            <Setter Property="Padding" Value="10,6"/>
+                        </Style>
+                    </Menu.Resources>
+                    <MenuItem Header="文件" Style="{StaticResource TopMenuItem}">
+                        <MenuItem Header="新建" Click="OnFileNew"/>
+                        <Separator/>
+                        <MenuItem Header="打开项目" Click="OnMenuOpen"/>
+                        <MenuItem Header="保存项目" Click="OnMenuSave"/>
+                        <MenuItem Header="另存为" Click="OnMenuSaveAs"/>
+                        <MenuItem x:Name="RecentProjectsMenu" Header="最近打开"/>
+                        <Separator/>
+                        <MenuItem Header="添加数据" Click="OnAddDataClick"/>
+                    </MenuItem>
+                    <MenuItem Header="分析" Style="{StaticResource TopMenuItem}">
+                        <MenuItem Header="波段计算器" Click="OnBandCalculator"/>
+                        <MenuItem Header="影像裁剪" Click="OnRasterClip"/>
+                    </MenuItem>
+                    <MenuItem Header="工具" Style="{StaticResource TopMenuItem}">
+                        <MenuItem Header="坐标系统">
+                            <MenuItem Header="定义投影…" Click="OnDefineProjection"/>
+                            <MenuItem Header="投影转换（重投影）…" Click="OnRasterReprojection"/>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="影像配准" Click="OnRegistration"/>
+                        <MenuItem Header="批量影像配准" Click="OnBatchRegistration"/>
+                        <Separator/>
+                        <MenuItem Header="影像融合" Click="OnImageFusion"/>
+                        <MenuItem Header="批量影像融合" Click="OnBatchImageFusion"/>
+                    </MenuItem>
+                </Menu>
+            </DockPanel>
+        </Border>
 
         <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="{StaticResource BorderSoft}"
-                BorderThickness="0,0,0,1" Padding="8,5">
-            <DockPanel LastChildFill="False">
-                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                BorderThickness="0,0,0,1" Padding="10,3,8,2">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="52"/>
+                        <RowDefinition Height="15"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal">
                     <Button Style="{StaticResource ToolButton}" ToolTip="新建" Click="OnFileNew">
                         <StackPanel>
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
@@ -196,9 +244,9 @@
                     <Button Style="{StaticResource ToolButton}" ToolTip="打开项目" Click="OnOpenFileClick">
                         <StackPanel>
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
-                                <Path Stroke="#C28A1A" StrokeThickness="1.6" StrokeLineJoin="Round" Fill="#FFE8A3"
+                                <Path Stroke="#48677A" StrokeThickness="1.6" StrokeLineJoin="Round" Fill="#EEF3F5"
                                       Data="M3.5,8 H9.2 L11,10 H20.5 V18.8 H3.5 Z"/>
-                                <Path Stroke="#C28A1A" StrokeThickness="1.6" StrokeLineJoin="Round" Fill="#FFD35A"
+                                <Path Stroke="#48677A" StrokeThickness="1.6" StrokeLineJoin="Round" Fill="#DCE8ED"
                                       Data="M3.5,8 V6 H9.5 L11.2,8 Z"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="打开"/>
@@ -207,11 +255,11 @@
                     <Button Style="{StaticResource ToolButton}" ToolTip="添加数据" Click="OnAddDataClick">
                         <StackPanel>
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
-                                <Path Stroke="#5E8BB8" StrokeThickness="1.5" StrokeLineJoin="Round" Fill="#DCEBFF"
+                                <Path Stroke="#48677A" StrokeThickness="1.5" StrokeLineJoin="Round" Fill="#E4EDF1"
                                       Data="M12,3.8 L19,7.8 L12,11.8 L5,7.8 Z"/>
-                                <Path Stroke="#C28A1A" StrokeThickness="1.5" StrokeLineJoin="Round" Fill="#FFE08A"
+                                <Path Stroke="#48677A" StrokeThickness="1.5" StrokeLineJoin="Round" Fill="#D7E3E9"
                                       Data="M5,7.8 V15.7 L12,20 V11.8 Z"/>
-                                <Path Stroke="#2563EB" StrokeThickness="1.5" StrokeLineJoin="Round" Fill="#A8D4FF"
+                                <Path Stroke="#1677A8" StrokeThickness="1.5" StrokeLineJoin="Round" Fill="#C8E1EA"
                                       Data="M19,7.8 V15.7 L12,20 V11.8 Z"/>
                                 <Path Stroke="#2F4058" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                       Data="M12,6.4 V9.6 M10.4,8 H13.6"/>
@@ -222,24 +270,33 @@
                     <Button Style="{StaticResource ToolButton}" ToolTip="保存项目" Click="OnMenuSave">
                         <StackPanel>
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
-                                <Path Stroke="#2F4058" StrokeThickness="1.7" StrokeLineJoin="Round" Fill="#E9F2FF"
+                                <Path Stroke="#3F5E72" StrokeThickness="1.7" StrokeLineJoin="Round" Fill="#E8F0F4"
                                       Data="M5,4 H16 L20,8 V20 H5 Z"/>
                                 <Rectangle Canvas.Left="8" Canvas.Top="5" Width="8" Height="6" RadiusX="1" RadiusY="1"
-                                           Stroke="#2563EB" StrokeThickness="1.4" Fill="#8EC5FF"/>
+                                           Stroke="#1677A8" StrokeThickness="1.4" Fill="#B9DCE8"/>
                                 <Path Stroke="#2F4058" StrokeThickness="1.6" StrokeLineJoin="Round" Fill="#FFFFFF"
                                       Data="M8,15 H17 V20 H8 Z"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="保存"/>
                         </StackPanel>
                     </Button>
+                    </StackPanel>
+                    <TextBlock Grid.Row="1" Style="{StaticResource ToolGroupLabel}" Text="项目"/>
+                </Grid>
 
-                    <Border Style="{StaticResource ToolSep}"/>
+                <Border Style="{StaticResource ToolSep}"/>
 
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="52"/>
+                        <RowDefinition Height="15"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal">
                     <ToggleButton x:Name="PanBtn" Style="{StaticResource ToolToggle}" IsChecked="True"
                                   ToolTip="平移" Click="OnPanClick">
                         <StackPanel>
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
-                                <Path Stroke="#5F84B8" StrokeThickness="1.75" StrokeStartLineCap="Round"
+                                <Path Stroke="#1677A8" StrokeThickness="1.75" StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="#DDEBFF"
                                       Data="M7.9,12.3 V8.5 A1.35,1.35 0 0,1 10.6,8.5 V11.7
                                             M10.6,11.7 V6.6 A1.35,1.35 0 0,1 13.3,6.6 V11.6
@@ -248,7 +305,7 @@
                                             C18.7,17.4 16.7,20.1 13.7,20.1 H11
                                             C9.4,20.1 8.1,19.1 7.3,17.7 L5.4,14.5
                                             A1.15,1.15 0 0,1 7.2,12.9 L7.9,13.7"/>
-                                <Path Stroke="#5F84B8" StrokeThickness="1.2" StrokeStartLineCap="Round"
+                                <Path Stroke="#1677A8" StrokeThickness="1.2" StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" Data="M10.6,11.2 V12.5 M13.3,11.1 V12.4 M16,11.6 V12.8"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="平移"/>
@@ -259,7 +316,7 @@
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
                                 <Path Stroke="#2F4058" StrokeThickness="1.9" StrokeLineJoin="Round" Fill="#F8FBFF"
                                       Data="M10.5,4 A6.2,6.2 0 1,0 10.5,16.4 A6.2,6.2 0 1,0 10.5,4 Z"/>
-                                <Path Stroke="#2563EB" StrokeThickness="1.8" StrokeStartLineCap="Round" Data="M10.5,7.6 V12.8 M7.9,10.2 H13.1"/>
+                                <Path Stroke="#1677A8" StrokeThickness="1.8" StrokeStartLineCap="Round" Data="M10.5,7.6 V12.8 M7.9,10.2 H13.1"/>
                                 <Path Stroke="#2F4058" StrokeThickness="1.9" StrokeStartLineCap="Round" Data="M15.2,15.2 L20.5,20.5"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="放大"/>
@@ -270,7 +327,7 @@
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
                                 <Path Stroke="#2F4058" StrokeThickness="1.9" StrokeLineJoin="Round" Fill="#F8FBFF"
                                       Data="M10.5,4 A6.2,6.2 0 1,0 10.5,16.4 A6.2,6.2 0 1,0 10.5,4 Z"/>
-                                <Path Stroke="#2563EB" StrokeThickness="1.8" StrokeStartLineCap="Round" Data="M7.9,10.2 H13.1"/>
+                                <Path Stroke="#1677A8" StrokeThickness="1.8" StrokeStartLineCap="Round" Data="M7.9,10.2 H13.1"/>
                                 <Path Stroke="#2F4058" StrokeThickness="1.9" StrokeStartLineCap="Round" Data="M15.2,15.2 L20.5,20.5"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="缩小"/>
@@ -281,15 +338,24 @@
                             <Canvas Width="24" Height="24" HorizontalAlignment="Center">
                                 <Path Stroke="#2F4058" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                       StrokeLineJoin="Round" Data="M4,9 V4 H9 M15,4 H20 V9 M20,15 V20 H15 M9,20 H4 V15"/>
-                                <Rectangle Canvas.Left="8" Canvas.Top="8" Width="8" Height="8" Stroke="#2563EB"
+                                <Rectangle Canvas.Left="8" Canvas.Top="8" Width="8" Height="8" Stroke="#1677A8"
                                            StrokeThickness="1.5" Fill="#F8FBFF"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="全图"/>
                         </StackPanel>
                     </Button>
+                    </StackPanel>
+                    <TextBlock Grid.Row="1" Style="{StaticResource ToolGroupLabel}" Text="地图导航"/>
+                </Grid>
 
-                    <Border Style="{StaticResource ToolSep}"/>
+                <Border Style="{StaticResource ToolSep}"/>
 
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="52"/>
+                        <RowDefinition Height="15"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal">
                     <ToggleButton x:Name="IdentifyBtn" Style="{StaticResource ToolToggle}"
                                   ToolTip="识别像素值" Click="OnIdentifyClick">
                         <StackPanel>
@@ -298,43 +364,54 @@
                                          Stroke="#2F4058" StrokeThickness="1.7" Fill="#FFFFFF"/>
                                 <Path Stroke="#2F4058" StrokeThickness="1.8" StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" Data="M12,4 V7 M12,17 V20 M4,12 H7 M17,12 H20"/>
-                                <Path Stroke="#C28A1A" StrokeThickness="1.7" StrokeStartLineCap="Round"
+                                <Path Stroke="#1677A8" StrokeThickness="1.7" StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" Data="M6.4,6.4 L8.5,8.5 M17.6,6.4 L15.5,8.5 M6.4,17.6 L8.5,15.5 M17.6,17.6 L15.5,15.5"/>
                             </Canvas>
                             <TextBlock Style="{StaticResource ToolLabel}" Text="识别"/>
                         </StackPanel>
                     </ToggleButton>
-                </StackPanel>
-            </DockPanel>
+                    </StackPanel>
+                    <TextBlock Grid.Row="1" Style="{StaticResource ToolGroupLabel}" Text="查询"/>
+                </Grid>
+            </StackPanel>
         </Border>
 
-        <Grid Grid.Row="2" Margin="0">
+        <Grid Grid.Row="2" Margin="8,8,8,7">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="285" MinWidth="230"/>
-                <ColumnDefinition Width="8"/>
+                <ColumnDefinition Width="292" MinWidth="240"/>
+                <ColumnDefinition Width="7"/>
                 <ColumnDefinition Width="*" MinWidth="360"/>
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="{StaticResource PanelBg}"
                     BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
-                    CornerRadius="0" Margin="8,8,0,8">
+                    CornerRadius="3">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="12,10,10,7">
+                    <Grid Grid.Row="0" Background="#E7EDF1">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="图层" FontSize="14" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextMain}" VerticalAlignment="Center"/>
+                        <Border Background="{StaticResource Accent}"/>
+                        <StackPanel Grid.Column="1" Margin="11,8,8,7">
+                            <TextBlock Text="内容" FontSize="13.5" FontWeight="SemiBold"
+                                       Foreground="#223746"/>
+                            <TextBlock Text="图层与绘制顺序" FontSize="10.5" Foreground="#6A7F8F" Margin="0,1,0,0"/>
+                        </StackPanel>
                     </Grid>
 
-                    <Grid Grid.Row="1" Margin="12,0,12,9">
+                    <Border Grid.Row="1" Height="1" Background="#C5D0D8"/>
+
+                    <Grid Grid.Row="2" Margin="11,10,11,8">
                         <TextBox x:Name="LayerSearchBox" Style="{StaticResource SearchBox}"
                                  TextChanged="OnLayerSearchTextChanged"/>
                         <Path Style="{StaticResource IconPath}" Width="14" Height="14"
@@ -357,7 +434,7 @@
                         </TextBlock>
                     </Grid>
 
-                    <ListBox x:Name="LayerListBox" Grid.Row="2" Margin="8,0,8,8"
+                    <ListBox x:Name="LayerListBox" Grid.Row="3" Margin="7,0,7,5"
                              BorderThickness="0" Background="Transparent"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -370,9 +447,10 @@
                             <GroupStyle>
                                 <GroupStyle.HeaderTemplate>
                                     <DataTemplate>
-                                        <Border Background="#F3F7FB" CornerRadius="4" Padding="8,5" Margin="4,7,4,3">
-                                            <TextBlock Text="{Binding Name}" Foreground="#486179"
-                                                       FontSize="12" FontWeight="SemiBold"/>
+                                        <Border Background="#E9EFF3" BorderBrush="#CDD7DE" BorderThickness="0,0,0,1"
+                                                CornerRadius="2" Padding="8,5" Margin="4,7,4,3">
+                                            <TextBlock Text="{Binding Name}" Foreground="#38566B"
+                                                       FontSize="11.5" FontWeight="SemiBold"/>
                                         </Border>
                                     </DataTemplate>
                                 </GroupStyle.HeaderTemplate>
@@ -381,7 +459,7 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Padding" Value="0"/>
-                                <Setter Property="Margin" Value="4,1"/>
+                                <Setter Property="Margin" Value="3,1"/>
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                 <Setter Property="Background" Value="Transparent"/>
                                 <Setter Property="Template">
@@ -389,17 +467,17 @@
                                         <ControlTemplate TargetType="ListBoxItem">
                                             <Border x:Name="bd" Background="{TemplateBinding Background}"
                                                     BorderBrush="Transparent" BorderThickness="1"
-                                                    CornerRadius="4" Padding="0">
+                                                    CornerRadius="2" Padding="0">
                                                 <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="bd" Property="Background" Value="#F1F6FD"/>
-                                                    <Setter TargetName="bd" Property="BorderBrush" Value="#D5E5FA"/>
+                                                    <Setter TargetName="bd" Property="Background" Value="#EDF3F6"/>
+                                                    <Setter TargetName="bd" Property="BorderBrush" Value="#CFDCE3"/>
                                                 </Trigger>
                                                 <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="bd" Property="Background" Value="#E4F0FF"/>
-                                                    <Setter TargetName="bd" Property="BorderBrush" Value="#8EBBFF"/>
+                                                    <Setter TargetName="bd" Property="Background" Value="#DDECF2"/>
+                                                    <Setter TargetName="bd" Property="BorderBrush" Value="#6AA2B9"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -487,6 +565,14 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+
+                    <Border Grid.Row="4" BorderBrush="#D6DEE4" BorderThickness="0,1,0,0" Padding="11,6">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Width="12" Height="12" Stretch="Uniform" Stroke="#7A8E9C" StrokeThickness="1.4"
+                                  Data="M2,4 L6,1 L10,4 M2,8 L6,11 L10,8"/>
+                            <TextBlock Text="拖拽图层可调整绘制顺序" FontSize="10.5" Foreground="#758896" Margin="7,0,0,0"/>
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </Border>
 
@@ -495,8 +581,34 @@
                           ShowsPreview="True"/>
 
             <Border Grid.Column="2" Background="#FFFFFF" BorderBrush="{StaticResource BorderSoft}"
-                    BorderThickness="1" CornerRadius="8" ClipToBounds="True">
-                <Grid Margin="0,8,8,8">
+                    BorderThickness="1" CornerRadius="3" ClipToBounds="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="34"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Background="#F4F6F8" BorderBrush="#CBD5DC" BorderThickness="0,0,0,1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Width="3" Background="{StaticResource Accent}"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0">
+                                <Path Width="15" Height="15" Stretch="Uniform" Stroke="#42647A" StrokeThickness="1.35"
+                                      StrokeLineJoin="Round" Fill="Transparent"
+                                      Data="M1,4 L5,1 L9,4 L13,1 V10 L9,13 L5,10 L1,13 Z M5,1 V10 M9,4 V13"/>
+                                <TextBlock Text="地图视图" Foreground="#294155" FontWeight="SemiBold" FontSize="12"
+                                           VerticalAlignment="Center" Margin="7,0,0,0"/>
+                            </StackPanel>
+                            <TextBlock Grid.Column="2" Text="M A P" Foreground="#8396A4" FontSize="9.5"
+                                       VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="1" Background="#DDE4E8" Margin="0">
                     <mapsui:MapControl x:Name="MapControl"/>
                     <controls:GpuRasterMapControl x:Name="GpuRasterMap"/>
                     <Canvas x:Name="IdentifyMarkerCanvas" IsHitTestVisible="False">
@@ -544,8 +656,8 @@
                         </StackPanel>
                     </Canvas>
                     <Border x:Name="ProgressPanel" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                            Background="#F8FAFC" BorderBrush="#CBD5E1" BorderThickness="1"
-                            CornerRadius="8" Padding="12,8" Margin="0,0,14,12"
+                            Background="#F8FAFC" BorderBrush="#9FB2BF" BorderThickness="1"
+                            CornerRadius="3" Padding="12,9" Margin="0,0,14,12"
                             Visibility="Collapsed" MinWidth="250">
                         <StackPanel>
                             <TextBlock x:Name="ProgressLabel" Text="处理中..." FontSize="12"
@@ -555,25 +667,24 @@
                                          IsIndeterminate="False" Minimum="0" Maximum="100"/>
                         </StackPanel>
                     </Border>
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>
 
-        <Border Grid.Row="3" Background="#FFFFFF" BorderBrush="{StaticResource BorderSoft}"
-                BorderThickness="0,1,0,0" Padding="12,0" Height="28">
+        <Border Grid.Row="3" Background="#F7F9FA" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,1,0,0" Padding="12,0" Height="29">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="CoordText" Grid.Column="0" Text="-" FontSize="11.5"
+                <Ellipse Width="6" Height="6" Fill="#2F9A78" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" x:Name="CoordText" Text="-" FontSize="11.5" Margin="8,0,0,0"
                            Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
-                <TextBlock x:Name="CrsStatusText" Grid.Column="2" Text="-" FontSize="11.5"
-                           Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="18,0,0,0"/>
-                <TextBlock x:Name="StatusText" Grid.Column="3" Text="就绪" FontSize="11.5"
-                           Foreground="#94A3B8" VerticalAlignment="Center" Margin="18,0,0,0"/>
+                <TextBlock Grid.Column="2" Text="GeoVision  ·  Desktop GIS" FontSize="10.5"
+                           Foreground="#7B8D99" VerticalAlignment="Center"/>
             </Grid>
         </Border>
     </Grid>

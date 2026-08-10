@@ -21,6 +21,9 @@ python_env/
 *.pt
 *.onnx
 
+# Local Codex work artifacts
+.codex_work/
+
 # Python caches
 __pycache__/
 *.py[cod]

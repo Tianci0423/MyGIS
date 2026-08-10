@@ -10,6 +10,8 @@ namespace GeoVision.Services
     {
         private const int GdalOpenRasterFlag = 0x02;
         private const string OverviewBuildMarkerSuffix = ".ovr.geovision-building";
+        private static readonly TimeSpan SourceAvailabilityCheckInterval = TimeSpan.FromSeconds(1);
+        private const int MissingSourceChecksBeforeAbort = 3;
         private static readonly ConcurrentDictionary<string, DatasetHandle> _datasets = new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, object> _datasetOpenLocks = new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<int, Process> _overviewWorkers = new();
@@ -57,6 +59,7 @@ namespace GeoVision.Services
             string normalizedPath,
             IProgress<(int percent, string label)>? progress)
         {
+            EnsureSourceAvailable(normalizedPath);
             string fileName = Path.GetFileName(normalizedPath);
             progress?.Report((2, $"正在打开 {fileName}"));
 
@@ -124,6 +127,7 @@ namespace GeoVision.Services
 
         private static Dataset OpenDataset(string normalizedPath, bool ignoreOverviews = false)
         {
+            EnsureSourceAvailable(normalizedPath);
             var ds = ignoreOverviews
                 ? Gdal.OpenEx(
                     normalizedPath,
@@ -180,16 +184,23 @@ namespace GeoVision.Services
 
                 _overviewWorkers[worker.Id] = worker;
                 int workerPercent = 0;
-                int lastReportedPercent = -1;
                 long lastTempLength = -1;
                 TimeSpan lastCpu = TimeSpan.Zero;
                 DateTime lastActivityUtc = DateTime.UtcNow;
+                DateTime buildStartedUtc = DateTime.UtcNow;
+                DateTime lastLoopUtc = buildStartedUtc;
+                DateTime lastProcessingStatusUtc = buildStartedUtc;
+                DateTime lastSourceCheckUtc = buildStartedUtc;
+                double displayedProgress = 5d;
+                int lastReportedDisplayPercent = 5;
+                int consecutiveMissingSourceChecks = 0;
                 long sourceLength = TryGetFileLength(sourcePath);
-                ulong initialReadBytes = TryGetProcessReadBytes(worker, out ulong readBytesAtStart)
-                    ? readBytesAtStart
+                ulong readBaseline = TryGetProcessReadBytes(worker, out ulong initialReadBytes)
+                    ? initialReadBytes
                     : 0;
+                bool readBaselineCalibrated = false;
 
-                while (!worker.WaitForExit(300))
+                while (!worker.WaitForExit(100))
                 {
                     if (Volatile.Read(ref _shuttingDown) != 0)
                     {
@@ -200,42 +211,98 @@ namespace GeoVision.Services
                     if (TryReadWorkerProgress(progressPath, out int reportedWorkerPercent))
                     {
                         workerPercent = Math.Max(workerPercent, reportedWorkerPercent);
+                        if (!readBaselineCalibrated && reportedWorkerPercent >= 3)
+                        {
+                            if (TryGetProcessReadBytes(worker, out ulong calibratedReadBytes))
+                                readBaseline = calibratedReadBytes;
+                            readBaselineCalibrated = true;
+                        }
                     }
 
                     long tempLength = TryGetFileLength(tempOverviewPath);
                     worker.Refresh();
                     TimeSpan cpu = worker.TotalProcessorTime;
-                    int ioPercent = EstimateReadProgress(worker, initialReadBytes, sourceLength);
-                    int effectivePercent = Math.Max(workerPercent, ioPercent);
-                    if (effectivePercent > lastReportedPercent)
+                    DateTime now = DateTime.UtcNow;
+                    if (now - lastSourceCheckUtc >= SourceAvailabilityCheckInterval)
                     {
-                        lastReportedPercent = effectivePercent;
-                        lastActivityUtc = DateTime.UtcNow;
-                        int displayPercent = 5 + (int)Math.Round(Math.Clamp(effectivePercent, 0, 100) * 0.83);
-                        progress?.Report((displayPercent, $"正在构建金字塔 {fileName}"));
+                        lastSourceCheckUtc = now;
+                        consecutiveMissingSourceChecks = IsSourceAvailable(sourcePath)
+                            ? 0
+                            : consecutiveMissingSourceChecks + 1;
+                        if (consecutiveMissingSourceChecks >= MissingSourceChecksBeforeAbort)
+                        {
+                            TryKill(worker);
+                            throw CreateSourceUnavailableException(sourcePath);
+                        }
                     }
 
-                    if (tempLength != lastTempLength || cpu > lastCpu)
+                    bool hasActivity = tempLength != lastTempLength || cpu > lastCpu;
+                    if (hasActivity)
                     {
+                        lastActivityUtc = now;
                         lastTempLength = tempLength;
                         lastCpu = cpu;
-                        lastActivityUtc = DateTime.UtcNow;
                     }
 
-                    if (DateTime.UtcNow - lastActivityUtc > TimeSpan.FromMinutes(2))
+                    double elapsedSeconds = Math.Clamp((now - lastLoopUtc).TotalSeconds, 0d, 1d);
+                    lastLoopUtc = now;
+                    double confirmedProgress = 5d + Math.Clamp(workerPercent, 0, 100) * 0.83d;
+                    double ioProgress = EstimateReadDisplayProgress(
+                        worker,
+                        readBaseline,
+                        sourceLength);
+                    double measuredProgress = Math.Max(confirmedProgress, ioProgress);
+                    double catchUpRate = measuredProgress > displayedProgress
+                        ? Math.Clamp((measuredProgress - displayedProgress) / 5d, 0d, 2.5d)
+                        : 0d;
+                    double progressRate = Math.Max(GetSyntheticProgressRate(displayedProgress), catchUpRate);
+                    double runningCap = workerPercent >= 100 ? 88d : 87d;
+                    displayedProgress = Math.Min(runningCap, displayedProgress + progressRate * elapsedSeconds);
+                    int displayPercent = (int)Math.Floor(displayedProgress);
+                    if (displayPercent > lastReportedDisplayPercent ||
+                        now - lastProcessingStatusUtc >= TimeSpan.FromSeconds(1))
+                    {
+                        TimeSpan processingTime = now - buildStartedUtc;
+                        string elapsed = $"{(int)processingTime.TotalMinutes:00}:{processingTime.Seconds:00}";
+                        progress?.Report((displayPercent, $"正在构建金字塔 {fileName}（处理中 {elapsed}）"));
+                        lastReportedDisplayPercent = Math.Max(lastReportedDisplayPercent, displayPercent);
+                        lastProcessingStatusUtc = now;
+                    }
+
+                    if (now - lastActivityUtc > TimeSpan.FromMinutes(2))
                     {
                         TryKill(worker);
-                        progress?.Report((88, $"金字塔构建无响应，使用原始影像 {fileName}"));
+                        ReportSmoothCompletion(
+                            progress,
+                            lastReportedDisplayPercent,
+                            $"金字塔构建无响应，使用原始影像 {fileName}");
                         return false;
                     }
                 }
 
+                EnsureSourceAvailable(sourcePath);
                 if (worker.ExitCode == 0 && File.Exists(finalOverviewPath))
+                {
+                    ReportSmoothCompletion(
+                        progress,
+                        lastReportedDisplayPercent,
+                        $"正在完成金字塔 {fileName}");
                     return true;
+                }
 
                 if (File.Exists(errorPath))
                     Debug.WriteLine($"Overview worker error: {File.ReadAllText(errorPath)}");
+                ReportSmoothCompletion(
+                    progress,
+                    lastReportedDisplayPercent,
+                    $"金字塔未完成，使用原始影像 {fileName}");
                 return false;
+            }
+            catch (FileNotFoundException)
+            {
+                if (worker != null)
+                    TryKill(worker);
+                throw;
             }
             catch (Exception ex)
             {
@@ -267,7 +334,16 @@ namespace GeoVision.Services
             percent = 0;
             try
             {
-                return File.Exists(path) && int.TryParse(File.ReadAllText(path), out percent);
+                if (!File.Exists(path))
+                    return false;
+
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return int.TryParse(reader.ReadToEnd(), out percent);
             }
             catch
             {
@@ -275,14 +351,54 @@ namespace GeoVision.Services
             }
         }
 
-        private static int EstimateReadProgress(Process process, ulong initialReadBytes, long sourceLength)
+        private static double GetSyntheticProgressRate(double displayedProgress)
         {
-            if (sourceLength <= 0 || !TryGetProcessReadBytes(process, out ulong currentReadBytes) ||
-                currentReadBytes <= initialReadBytes)
-                return 1;
+            return displayedProgress switch
+            {
+                < 35d => 1.2d,
+                < 60d => 0.65d,
+                < 75d => 0.25d,
+                < 84d => 0.08d,
+                _ => 0.02d
+            };
+        }
 
-            double ratio = (currentReadBytes - initialReadBytes) / (double)sourceLength;
-            return 1 + (int)Math.Round(Math.Clamp(ratio, 0d, 1d) * 64d);
+        private static double EstimateReadDisplayProgress(
+            Process process,
+            ulong baselineReadBytes,
+            long sourceLength)
+        {
+            if (sourceLength <= 0 ||
+                !TryGetProcessReadBytes(process, out ulong currentReadBytes) ||
+                currentReadBytes <= baselineReadBytes)
+            {
+                return 5d;
+            }
+
+            double completedRatio = (currentReadBytes - baselineReadBytes) / (double)sourceLength;
+            return 5d + Math.Clamp(completedRatio, 0d, 1d) * 82d;
+        }
+
+        private static void ReportSmoothCompletion(
+            IProgress<(int percent, string label)>? progress,
+            int currentPercent,
+            string label)
+        {
+            const int targetPercent = 88;
+            currentPercent = Math.Clamp(currentPercent, 5, targetPercent);
+            if (progress == null)
+                return;
+
+            int remaining = targetPercent - currentPercent;
+            int delayMilliseconds = remaining > 0
+                ? Math.Clamp(2500 / remaining, 25, 100)
+                : 0;
+            for (int percent = currentPercent + 1; percent <= targetPercent; percent++)
+            {
+                progress.Report((percent, label));
+                if (delayMilliseconds > 0)
+                    Thread.Sleep(delayMilliseconds);
+            }
         }
 
         private static bool TryGetProcessReadBytes(Process process, out ulong readBytes)
@@ -290,7 +406,7 @@ namespace GeoVision.Services
             readBytes = 0;
             try
             {
-                if (!GetProcessIoCounters(process.Handle, out var counters))
+                if (!GetProcessIoCounters(process.Handle, out ProcessIoCounters counters))
                     return false;
 
                 readBytes = counters.ReadTransferCount;
@@ -345,6 +461,34 @@ namespace GeoVision.Services
                 return 0;
             }
         }
+
+        private static bool IsSourceAvailable(string sourcePath)
+        {
+            try
+            {
+                string? root = Path.GetPathRoot(sourcePath);
+                bool hasDriveLetter = root is { Length: >= 2 } && root[1] == ':';
+                if (hasDriveLetter && !new DriveInfo(root!).IsReady)
+                    return false;
+
+                return File.Exists(sourcePath);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void EnsureSourceAvailable(string sourcePath)
+        {
+            if (!IsSourceAvailable(sourcePath))
+                throw CreateSourceUnavailableException(sourcePath);
+        }
+
+        private static FileNotFoundException CreateSourceUnavailableException(string sourcePath)
+            => new(
+                $"源影像文件或所在磁盘当前不可用，请检查磁盘连接后重试：{sourcePath}",
+                sourcePath);
 
         private static void TryKill(Process process)
         {

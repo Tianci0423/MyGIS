@@ -18,6 +18,8 @@ namespace GeoVision.Controls
         private const int TileGridScreenPixels = 512;
         private const int FinalTileRenderPixels = 512;
         private const int InteractiveTileRenderPixels = 256;
+        private const int MinPixelInspectionTilePixels = 128;
+        private const int MaxPixelInspectionTilePixels = 256;
         private const int TilePrefetchMargin = 1;
         private const int MaxGpuTextures = 480;
         private const int MaxPixelGridLines = 3000;
@@ -25,7 +27,6 @@ namespace GeoVision.Controls
         private const int MaxPredictiveDetailPrefetchTiles = 10;
         private const int MaxQueuedTileLoads = 96;
         private const bool ShowPixelGridOverlay = false;
-        private const double TileSeamOverlapScreenPixels = 0.65;
         private const double ZoomInFactor = 0.8;
         private const double ZoomOutFactor = 1.25;
         private const double ZoomAnimationSeconds = 0.14;
@@ -40,7 +41,7 @@ namespace GeoVision.Controls
         private readonly ConcurrentDictionary<TileKey, long> _loadingTiles = new();
         private readonly ConcurrentQueue<TileUpload> _pendingUploads = new();
         private readonly ConcurrentQueue<int> _texturesToDelete = new();
-        private readonly SemaphoreSlim _loadSemaphore = new(Math.Max(1, Environment.ProcessorCount / 2));
+        private readonly SemaphoreSlim _loadSemaphore = new(Math.Clamp(Environment.ProcessorCount / 2, 1, 4));
         private readonly DispatcherTimer _resizeSettleTimer = new();
         private readonly ScaleTransform _resizeScaleTransform = new(1, 1);
         private readonly TranslateTransform _resizeTranslateTransform = new(0, 0);
@@ -387,21 +388,57 @@ namespace GeoVision.Controls
             foreach (var layer in _layers.Where(l => l.IsVisible))
             {
                 bool pixelInspection = IsPixelInspectionActive(layer.Provider);
-                var renderSettings = GetRenderSettings(pixelInspection);
+                var renderSettings = GetRenderSettings(layer.Provider, pixelInspection);
                 var requests = layer.Provider.CreateGpuTileRequests(
-                    view, _resolution, TileGridScreenPixels,
+                    view, _resolution, renderSettings.TileGridPixels,
                     renderSettings.RenderPixels, renderSettings.TileMargin);
 
-                var visibleTiles = new List<VisibleTileRequest>(requests.Count);
-                var loadedTiles = new List<VisibleLoadedTile>(requests.Count);
+                double viewCenterX = (view.MinX + view.MaxX) * 0.5;
+                double viewCenterY = (view.MinY + view.MaxY) * 0.5;
+                var requestPriorities = requests
+                    .Select(request =>
+                    {
+                        bool intersectsView = request.Extent.Intersects(view);
+                        double tileCenterX = (request.Extent.MinX + request.Extent.MaxX) * 0.5;
+                        double tileCenterY = (request.Extent.MinY + request.Extent.MaxY) * 0.5;
+                        double dx = tileCenterX - viewCenterX;
+                        double dy = tileCenterY - viewCenterY;
+                        return new PrioritizedTileRequest(
+                            request,
+                            intersectsView,
+                            dx * dx + dy * dy,
+                            Math.Abs(dx),
+                            Math.Abs(dy));
+                    })
+                    .ToList();
+                var prioritizedRequests = layer.Provider.UsesFullWidthStrips && pixelInspection
+                    ? requestPriorities
+                        .OrderBy(request => request.IntersectsView ? 0 : 1)
+                        .ThenBy(request => request.VerticalDistance)
+                        .ThenBy(request => request.HorizontalDistance)
+                        .ToList()
+                    : requestPriorities
+                        .OrderBy(request => request.IntersectsView ? 0 : 1)
+                        .ThenBy(request => request.DistanceSquared)
+                        .ToList();
 
-                foreach (var request in requests)
+                var loadedTiles = new List<VisibleLoadedTile>(requests.Count);
+                bool hasMissingVisibleTile = false;
+
+                foreach (var prioritized in prioritizedRequests)
                 {
+                    var request = prioritized.Request;
                     var key = CreateTileKey(layer.Provider, request);
-                    visibleTiles.Add(new VisibleTileRequest(key, request));
+                    bool hasFinalQuality = HasCompatibleTexture(key);
 
                     if (TryGetBestTexture(key, out var tile))
-                        loadedTiles.Add(new VisibleLoadedTile(key, tile));
+                    {
+                        if (prioritized.IntersectsView)
+                            loadedTiles.Add(new VisibleLoadedTile(key, tile));
+                    }
+
+                    if (prioritized.IntersectsView && !hasFinalQuality)
+                        hasMissingVisibleTile = true;
                 }
 
                 if (requests.Count > 0 && layer.Provider.Opacity >= 0.999d)
@@ -422,13 +459,21 @@ namespace GeoVision.Controls
                         pixelInspection && loaded.Key.Level == 0,
                         (float)layer.Provider.Opacity);
 
-                foreach (var visible in visibleTiles)
+                foreach (var prioritized in prioritizedRequests)
                 {
-                    if (!HasCompatibleTexture(visible.Key))
-                        ScheduleTileLoad(layer.Provider, visible.Request, visible.Key, viewportRevision);
+                    var key = CreateTileKey(layer.Provider, prioritized.Request);
+                    if (!HasCompatibleTexture(key))
+                    {
+                        ScheduleTileLoad(
+                            layer.Provider,
+                            prioritized.Request,
+                            key,
+                            viewportRevision,
+                            isPrefetch: !prioritized.IntersectsView);
+                    }
                 }
 
-                if (IsDetailPrefetchActive(layer.Provider))
+                if (!hasMissingVisibleTile && IsDetailPrefetchActive(layer.Provider))
                     ScheduleDetailPrefetch(layer.Provider, view, viewportRevision, MaxDetailPrefetchTilesPerFrame);
 
                 if (pixelInspection && ShowPixelGridOverlay)
@@ -436,18 +481,38 @@ namespace GeoVision.Controls
             }
         }
 
-        private (int RenderPixels, int TileMargin) GetRenderSettings(bool pixelInspection = false)
+        private (int TileGridPixels, int RenderPixels, int TileMargin) GetRenderSettings(
+            GdalRasterProvider provider,
+            bool pixelInspection = false)
         {
             bool isInteractive = _zoomAnimating || _dragging || _resizing;
             if (pixelInspection)
-                return (FinalTileRenderPixels, isInteractive ? 0 : TilePrefetchMargin);
+            {
+                int tilePixels = GetPixelInspectionTilePixels(provider);
+                return (tilePixels, tilePixels, isInteractive ? 0 : TilePrefetchMargin);
+            }
 
             if (_dragging || _resizing)
-                return (FinalTileRenderPixels, 0);
+                return (TileGridScreenPixels, FinalTileRenderPixels, 0);
 
             return _zoomAnimating
-                ? (InteractiveTileRenderPixels, 0)
-                : (FinalTileRenderPixels, TilePrefetchMargin);
+                ? (TileGridScreenPixels, InteractiveTileRenderPixels, 0)
+                : (TileGridScreenPixels, FinalTileRenderPixels, TilePrefetchMargin);
+        }
+
+        private static int GetPixelInspectionTilePixels(GdalRasterProvider provider)
+        {
+            if (provider.UsesFullWidthStrips)
+                return MinPixelInspectionTilePixels;
+
+            if (!provider.UsesInternalTiles)
+                return MaxPixelInspectionTilePixels;
+
+            long blockArea = (long)provider.SourceBlockWidth * provider.SourceBlockHeight;
+            double equivalentSquare = Math.Sqrt(Math.Max(1L, blockArea));
+            return equivalentSquare <= MinPixelInspectionTilePixels
+                ? MinPixelInspectionTilePixels
+                : MaxPixelInspectionTilePixels;
         }
 
         private void DrawTile(GpuTile tile, double scaleX, double scaleY, bool nearest, float opacity)
@@ -457,17 +522,21 @@ namespace GeoVision.Controls
             double y1 = WorldToFrameY(e.MaxY, scaleY);
             double x2 = WorldToFrameX(e.MaxX, scaleX);
             double y2 = WorldToFrameY(e.MinY, scaleY);
-            if (!nearest && opacity >= 0.999f)
-                ExpandScreenQuad(ref x1, ref y1, ref x2, ref y2);
+            double tx1 = tile.TexMinX;
+            double ty1 = tile.TexMinY;
+            double tx2 = tile.TexMaxX;
+            double ty2 = tile.TexMaxY;
+            if (!nearest)
+                SnapScreenQuadToPixelEdges(ref x1, ref y1, ref x2, ref y2);
 
             GL.BindTexture(TextureTarget.Texture2D, tile.TextureId);
             ApplyTextureFilter(tile, nearest);
             GL.Color4(1f, 1f, 1f, opacity);
             GL.Begin(PrimitiveType.Quads);
-            GL.TexCoord2(tile.TexMinX, tile.TexMinY); GL.Vertex2(x1, y1);
-            GL.TexCoord2(tile.TexMaxX, tile.TexMinY); GL.Vertex2(x2, y1);
-            GL.TexCoord2(tile.TexMaxX, tile.TexMaxY); GL.Vertex2(x2, y2);
-            GL.TexCoord2(tile.TexMinX, tile.TexMaxY); GL.Vertex2(x1, y2);
+            GL.TexCoord2(tx1, ty1); GL.Vertex2(x1, y1);
+            GL.TexCoord2(tx2, ty1); GL.Vertex2(x2, y1);
+            GL.TexCoord2(tx2, ty2); GL.Vertex2(x2, y2);
+            GL.TexCoord2(tx1, ty2); GL.Vertex2(x1, y2);
             GL.End();
         }
 
@@ -489,13 +558,12 @@ namespace GeoVision.Controls
             double y1 = WorldToFrameY(drawExtent.MaxY, scaleY);
             double x2 = WorldToFrameX(drawExtent.MaxX, scaleX);
             double y2 = WorldToFrameY(drawExtent.MinY, scaleY);
-            if (!nearest && opacity >= 0.999f)
-                ExpandScreenQuad(ref x1, ref y1, ref x2, ref y2);
-
             double tx1 = Lerp(tile.TexMinX, tile.TexMaxX, (drawExtent.MinX - e.MinX) / e.Width);
             double tx2 = Lerp(tile.TexMinX, tile.TexMaxX, (drawExtent.MaxX - e.MinX) / e.Width);
             double ty1 = Lerp(tile.TexMinY, tile.TexMaxY, (e.MaxY - drawExtent.MaxY) / e.Height);
             double ty2 = Lerp(tile.TexMinY, tile.TexMaxY, (e.MaxY - drawExtent.MinY) / e.Height);
+            if (!nearest)
+                SnapScreenQuadToPixelEdges(ref x1, ref y1, ref x2, ref y2);
 
             GL.BindTexture(TextureTarget.Texture2D, tile.TextureId);
             ApplyTextureFilter(tile, nearest);
@@ -577,12 +645,13 @@ namespace GeoVision.Controls
             tile.UsesNearestFiltering = nearest;
         }
 
-        private static void ExpandScreenQuad(ref double x1, ref double y1, ref double x2, ref double y2)
+        private static void SnapScreenQuadToPixelEdges(
+            ref double x1, ref double y1, ref double x2, ref double y2)
         {
-            x1 -= TileSeamOverlapScreenPixels;
-            y1 -= TileSeamOverlapScreenPixels;
-            x2 += TileSeamOverlapScreenPixels;
-            y2 += TileSeamOverlapScreenPixels;
+            x1 = Math.Round(x1, MidpointRounding.AwayFromZero);
+            y1 = Math.Round(y1, MidpointRounding.AwayFromZero);
+            x2 = Math.Round(x2, MidpointRounding.AwayFromZero);
+            y2 = Math.Round(y2, MidpointRounding.AwayFromZero);
         }
 
         private bool IsPixelInspectionActive(GdalRasterProvider provider)
@@ -618,11 +687,12 @@ namespace GeoVision.Controls
                 return;
 
             var prefetchView = ExpandExtent(view, DetailPrefetchViewExpansion);
+            int tilePixels = GetPixelInspectionTilePixels(provider);
             var requests = provider.CreateGpuTileRequests(
                 prefetchView,
                 nativeResolution,
-                TileGridScreenPixels,
-                FinalTileRenderPixels,
+                tilePixels,
+                tilePixels,
                 tileMargin: 0);
 
             if (requests.Count == 0)
@@ -775,10 +845,21 @@ namespace GeoVision.Controls
                         long latestKnownRevision = _loadingTiles.TryGetValue(key, out long latestBeforeRender)
                             ? Math.Max(latestBeforeRender, viewportRevision)
                             : viewportRevision;
-                        if (isPrefetch && latestKnownRevision + 1 < Volatile.Read(ref _viewportRevision))
+                        if (latestKnownRevision < Volatile.Read(ref _viewportRevision))
                             return;
 
-                        var rgba = provider.RenderTileToRgba(request);
+                        var rgba = provider.RenderTileToRgba(request, () =>
+                        {
+                            if (Volatile.Read(ref _disposed) != 0)
+                                return false;
+
+                            long currentRevision = Volatile.Read(ref _viewportRevision);
+                            return _loadingTiles.TryGetValue(key, out long requestedRevision) &&
+                                   requestedRevision >= currentRevision;
+                        });
+                        if (rgba.Length == 0)
+                            return;
+
                         if (Volatile.Read(ref _disposed) != 0)
                             return;
 
@@ -985,9 +1066,11 @@ namespace GeoVision.Controls
 
         private bool IsUploadStillRequested(TileUpload upload, MRect currentView)
         {
-            var renderSettings = GetRenderSettings(IsPixelInspectionActive(upload.Key.Provider));
+            var renderSettings = GetRenderSettings(
+                upload.Key.Provider,
+                IsPixelInspectionActive(upload.Key.Provider));
             var requests = upload.Key.Provider.CreateGpuTileRequests(
-                currentView, _resolution, TileGridScreenPixels,
+                currentView, _resolution, renderSettings.TileGridPixels,
                 renderSettings.RenderPixels, renderSettings.TileMargin);
 
             foreach (var request in requests)
@@ -1387,9 +1470,12 @@ namespace GeoVision.Controls
             long ViewportRevision,
             byte[] Rgba);
 
-        private readonly record struct VisibleTileRequest(
-            TileKey Key,
-            GdalRasterProvider.RasterTileRequest Request);
+        private readonly record struct PrioritizedTileRequest(
+            GdalRasterProvider.RasterTileRequest Request,
+            bool IntersectsView,
+            double DistanceSquared,
+            double HorizontalDistance,
+            double VerticalDistance);
 
         private readonly record struct VisibleLoadedTile(
             TileKey Key,
