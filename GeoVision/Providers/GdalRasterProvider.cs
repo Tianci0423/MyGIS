@@ -64,6 +64,7 @@ namespace GeoVision.Providers
             _sourceBandIndexes = sourceBandIndexes;
             _totalBands = _handle.DS.RasterCount;
             _rasterCrs = ReadCrs();
+            PixelSizeUnit = ReadPixelSizeUnit();
             (_sourceBlockWidth, _sourceBlockHeight) = ReadSourceBlockSize();
             _threadSafeRenderDataset = CreateThreadSafeRenderDataset(_handle.DS);
         }
@@ -76,6 +77,19 @@ namespace GeoVision.Providers
             StringComparison.OrdinalIgnoreCase);
         public int OverviewCount => _handle.OverviewCount;
         public string RasterCrs => _rasterCrs;
+        /// <summary>
+        /// Native raster cell size in the X direction, expressed in the dataset's
+        /// coordinate-system units. Rotation/skew is included in the vector length.
+        /// </summary>
+        public double? PixelSizeX => IsValidPixelSize(GetNativePixelSizeX())
+            ? GetNativePixelSizeX() : null;
+        /// <summary>
+        /// Native raster cell size in the Y direction, expressed in the dataset's
+        /// coordinate-system units. Rotation/skew is included in the vector length.
+        /// </summary>
+        public double? PixelSizeY => IsValidPixelSize(GetNativePixelSizeY())
+            ? GetNativePixelSizeY() : null;
+        public string PixelSizeUnit { get; }
         public double NativePixelResolution => GetNativePixelResolution();
         public int SourceBlockWidth => _sourceBlockWidth;
         public int SourceBlockHeight => _sourceBlockHeight;
@@ -142,6 +156,32 @@ namespace GeoVision.Providers
             catch
             {
                 return "未知";
+            }
+        }
+
+        private string ReadPixelSizeUnit()
+        {
+            try
+            {
+                string wkt = _handle.DS.GetProjection();
+                if (string.IsNullOrWhiteSpace(wkt)) return "坐标单位（未知）";
+                using var sr = new SpatialReference(wkt);
+                string? name = sr.IsGeographic() != 0
+                    ? sr.GetAngularUnitsName() : sr.GetLinearUnitsName();
+                return name?.ToLowerInvariant() switch
+                {
+                    "metre" or "meter" => "米",
+                    "degree" => "度",
+                    "foot" => "英尺",
+                    "us survey foot" or "us_survey_foot" => "美国测量英尺",
+                    null or "" or "unknown" => "坐标单位（未知）",
+                    _ => name
+                };
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Cannot read raster cell unit: {ex.Message}");
+                return "坐标单位（未知）";
             }
         }
 
@@ -496,14 +536,33 @@ namespace GeoVision.Providers
 
         private double GetNativePixelResolution()
         {
-            double colVector = Math.Sqrt(_geotransform[1] * _geotransform[1] + _geotransform[4] * _geotransform[4]);
-            double rowVector = Math.Sqrt(_geotransform[2] * _geotransform[2] + _geotransform[5] * _geotransform[5]);
+            double colVector = GetNativePixelSizeX();
+            double rowVector = GetNativePixelSizeY();
             double resolution = Math.Max(colVector, rowVector);
             if (resolution > 0 && !double.IsNaN(resolution) && !double.IsInfinity(resolution))
                 return resolution;
 
             return Math.Max(_fullExtent.Width / Math.Max(1, _rasterWidth), _fullExtent.Height / Math.Max(1, _rasterHeight));
         }
+
+        private double GetNativePixelSizeX()
+        {
+            double value = Math.Sqrt(
+                _geotransform[1] * _geotransform[1] +
+                _geotransform[4] * _geotransform[4]);
+            return value;
+        }
+
+        private double GetNativePixelSizeY()
+        {
+            double value = Math.Sqrt(
+                _geotransform[2] * _geotransform[2] +
+                _geotransform[5] * _geotransform[5]);
+            return value;
+        }
+
+        private static bool IsValidPixelSize(double value)
+            => value > 0 && !double.IsNaN(value) && !double.IsInfinity(value);
 
         private bool TryCreatePixelWindowForExtent(
             MRect extent,

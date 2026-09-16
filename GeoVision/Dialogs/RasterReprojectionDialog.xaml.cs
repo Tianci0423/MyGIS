@@ -126,8 +126,10 @@ namespace GeoVision.Dialogs
                 string crs = DescribeSpatialReference(projection);
                 var transform = new double[6];
                 dataset.GetGeoTransform(transform);
-                double pixelX = Math.Sqrt(transform[1] * transform[1] + transform[2] * transform[2]);
-                double pixelY = Math.Sqrt(transform[4] * transform[4] + transform[5] * transform[5]);
+                // GDAL geotransform vectors: column/pixel-X = (gt[1], gt[4]),
+                // row/pixel-Y = (gt[2], gt[5]).
+                double pixelX = Math.Sqrt(transform[1] * transform[1] + transform[4] * transform[4]);
+                double pixelY = Math.Sqrt(transform[2] * transform[2] + transform[5] * transform[5]);
                 SourceInfoText.Text =
                     $"源坐标系：{crs}\n" +
                     $"尺寸：{dataset.RasterXSize}×{dataset.RasterYSize}，{dataset.RasterCount} 波段；" +

@@ -57,6 +57,11 @@ namespace GeoVision
         private bool _clipSelectionActive;
         private bool _clipAdjustmentActive;
         private Rect _clipSelectionRect;
+        private Providers.GdalRasterProvider? _swipeLeftProvider;
+        private Providers.GdalRasterProvider? _swipeRightProvider;
+        private double _swipePosition = 0.5;
+        private bool _overviewEnabled;
+        private bool _cancelRequested;
 
         private void KillRunningPythonProcess()
         {
@@ -65,19 +70,25 @@ namespace GeoVision
                 if (_runningPythonProcess is { HasExited: false })
                 {
                     _runningPythonProcess.Kill(entireProcessTree: true);
-                    _runningPythonProcess.Dispose();
                 }
             }
             catch { }
+            finally
+            {
+                _runningPythonProcess?.Dispose();
+            }
             _runningPythonProcess = null;
+            CancelTaskButton.IsEnabled = false;
         }
 
         public void ShowProgress(string label)
         {
+            _cancelRequested = false;
             ProgressLabel.Text = label;
             ProgressBar.IsIndeterminate = true;
             ProgressBar.Value = 0;
             ProgressPanel.Visibility = Visibility.Visible;
+            CancelTaskButton.IsEnabled = _runningPythonProcess != null;
         }
 
         public void UpdateProgress(string label, int percent)
@@ -96,11 +107,37 @@ namespace GeoVision
                 ProgressBar.Value = percent;
             }
             ProgressPanel.Visibility = Visibility.Visible;
+            CancelTaskButton.IsEnabled = _runningPythonProcess != null;
         }
 
         public void HideProgress()
         {
             ProgressPanel.Visibility = Visibility.Collapsed;
+            CancelTaskButton.IsEnabled = false;
+        }
+
+        private void SetRunningPythonProcess(Process process)
+        {
+            _runningPythonProcess = process;
+            CancelTaskButton.IsEnabled = true;
+        }
+
+        private void OnCancelTaskClick(object sender, RoutedEventArgs e)
+        {
+            if (_runningPythonProcess == null)
+                return;
+            _cancelRequested = true;
+            ProgressLabel.Text = "正在取消任务...";
+            KillRunningPythonProcess();
+        }
+
+        private bool ConsumeCancellation()
+        {
+            if (!_cancelRequested)
+                return false;
+            _cancelRequested = false;
+            HideProgress();
+            return true;
         }
 
         private IProgress<(int percent, string label)> CreateLoadProgress(
@@ -193,15 +230,211 @@ namespace GeoVision
             map.Widgets.Clear();
             MapControl.UseFling = true;
             MapControl.Map = map;
+            map.Navigator.FetchRequested += (_, _) =>
+                Dispatcher.BeginInvoke(new Action(UpdateOverviewViewport));
             MapControl.PreviewMouseLeftButtonDown += OnMapClick;
             GpuRasterMap.PreviewMouseLeftButtonDown += OnClipSelectionMouseDown;
             GpuRasterMap.PreviewMouseMove += OnClipSelectionMouseMove;
             GpuRasterMap.PreviewMouseLeftButtonUp += OnClipSelectionMouseUp;
             GpuRasterMap.PreviewMouseLeftButtonDown += OnMapClick;
+            GpuRasterMap.ViewportChanged += (_, _) => UpdateOverviewViewport();
+
+            var overviewMap = new Map { CRS = "EPSG:3857" };
+            overviewMap.Widgets.Clear();
+            OverviewMapControl.UseFling = false;
+            OverviewMapControl.Map = overviewMap;
 
             _coordTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
             _coordTimer.Tick += OnCoordTimerTick;
             _coordTimer.Start();
+        }
+
+        private void OnOverviewToggleClick(object sender, RoutedEventArgs e)
+        {
+            _overviewEnabled = sender switch
+            {
+                ToggleButton toggle => toggle.IsChecked == true,
+                MenuItem menuItem => menuItem.IsChecked,
+                _ => !_overviewEnabled
+            };
+
+            SetOverviewToggleState(_overviewEnabled);
+            if (_overviewEnabled)
+                RefreshOverviewMap();
+            else
+                UpdateOverviewVisibility();
+        }
+
+        private void OnOverviewCloseClick(object sender, RoutedEventArgs e)
+        {
+            _overviewEnabled = false;
+            SetOverviewToggleState(false);
+            UpdateOverviewVisibility();
+        }
+
+        private void SetOverviewToggleState(bool enabled)
+        {
+            OverviewBtn.IsChecked = enabled;
+            OverviewMenuItem.IsChecked = enabled;
+        }
+
+        private void UpdateOverviewVisibility()
+        {
+            OverviewPanel.Visibility = _overviewEnabled && _layerItems.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        private void RefreshOverviewMap()
+        {
+            var overviewMap = OverviewMapControl.Map;
+            if (overviewMap == null)
+                return;
+
+            ClearOverviewLayers();
+            overviewMap.CRS = _mapCrs ?? MapControl.Map?.CRS ?? "EPSG:3857";
+
+            foreach (var item in _layerItems.Reverse())
+            {
+                if (item.Layer is not Mapsui.Layers.Layer sourceLayer ||
+                    sourceLayer.DataSource == null)
+                {
+                    continue;
+                }
+
+                var overviewLayer = new Mapsui.Layers.Layer(item.Name)
+                {
+                    DataSource = sourceLayer.DataSource,
+                    Style = sourceLayer.Style,
+                    Enabled = item.IsVisible,
+                    Opacity = sourceLayer.Opacity,
+                    Tag = sourceLayer.Tag
+                };
+                overviewMap.Layers.Add(overviewLayer);
+            }
+
+            UpdateOverviewVisibility();
+            if (!_overviewEnabled || _layerItems.Count == 0)
+                return;
+
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (GetOverviewExtent() is { } extent &&
+                    OverviewMapHost.ActualWidth > 0 && OverviewMapHost.ActualHeight > 0)
+                {
+                    overviewMap.Navigator.ZoomToBox(extent, MBoxFit.Fit, 0);
+                }
+
+                OverviewMapControl.Refresh();
+                UpdateOverviewViewport();
+            }), DispatcherPriority.Loaded);
+        }
+
+        private void ClearOverviewLayers()
+        {
+            var layers = OverviewMapControl.Map?.Layers;
+            if (layers == null)
+                return;
+
+            for (int i = layers.Count - 1; i >= 0; i--)
+                layers.Remove(layers.Get(i));
+        }
+
+        private MRect? GetOverviewExtent()
+        {
+            MRect? combined = null;
+            foreach (var item in _layerItems.Where(item => item.IsVisible && item.Layer != null))
+            {
+                MRect? extent = GetRasterProvider(item.Layer)?.GetExtent() ?? item.Layer!.Extent;
+                if (extent == null)
+                    continue;
+
+                combined = combined == null ? extent : combined.Join(extent);
+            }
+
+            return combined;
+        }
+
+        private void OnOverviewMapSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (_overviewEnabled && _layerItems.Count > 0)
+                RefreshOverviewMap();
+        }
+
+        private void UpdateOverviewViewport()
+        {
+            if (OverviewPanel.Visibility != Visibility.Visible ||
+                OverviewMapControl.Map == null)
+            {
+                return;
+            }
+
+            MRect? mainExtent = GpuRasterMap.HasRasterLayers
+                ? GpuRasterMap.ViewExtent
+                : MapControl.Map?.Navigator.Viewport.ToExtent();
+            if (mainExtent == null ||
+                OverviewMapHost.ActualWidth <= 0 || OverviewMapHost.ActualHeight <= 0 ||
+                OverviewMapControl.Map.Navigator.Viewport.Width <= 0 ||
+                OverviewMapControl.Map.Navigator.Viewport.Height <= 0)
+            {
+                OverviewViewportThumb.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            MRect screen = OverviewMapControl.Map.Navigator.Viewport.WorldToScreen(mainExtent);
+            double left = Math.Clamp(screen.MinX, 0, OverviewMapHost.ActualWidth);
+            double top = Math.Clamp(screen.MinY, 0, OverviewMapHost.ActualHeight);
+            double right = Math.Clamp(screen.MaxX, 0, OverviewMapHost.ActualWidth);
+            double bottom = Math.Clamp(screen.MaxY, 0, OverviewMapHost.ActualHeight);
+            double width = right - left;
+            double height = bottom - top;
+
+            if (width <= 0 || height <= 0)
+            {
+                OverviewViewportThumb.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            OverviewViewportThumb.Visibility = Visibility.Visible;
+            Canvas.SetLeft(OverviewViewportThumb, left);
+            Canvas.SetTop(OverviewViewportThumb, top);
+            OverviewViewportThumb.Width = Math.Max(6, width);
+            OverviewViewportThumb.Height = Math.Max(6, height);
+        }
+
+        private void OnOverviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (OverviewViewportThumb.IsMouseOver || OverviewMapControl.Map == null)
+                return;
+
+            Point position = e.GetPosition(OverviewInteractionCanvas);
+            MPoint world = OverviewMapControl.Map.Navigator.Viewport.ScreenToWorld(position.X, position.Y);
+            NavigateMainMapTo(world);
+            e.Handled = true;
+        }
+
+        private void OnOverviewViewportDragDelta(object sender, DragDeltaEventArgs e)
+        {
+            if (OverviewMapControl.Map == null)
+                return;
+
+            double left = Canvas.GetLeft(OverviewViewportThumb);
+            double top = Canvas.GetTop(OverviewViewportThumb);
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+
+            double centerX = left + OverviewViewportThumb.Width * 0.5 + e.HorizontalChange;
+            double centerY = top + OverviewViewportThumb.Height * 0.5 + e.VerticalChange;
+            MPoint world = OverviewMapControl.Map.Navigator.Viewport.ScreenToWorld(centerX, centerY);
+            NavigateMainMapTo(world);
+        }
+
+        private void NavigateMainMapTo(MPoint world)
+        {
+            if (GpuRasterMap.HasRasterLayers)
+                GpuRasterMap.CenterOn(world);
+            else
+                MapControl.Map?.Navigator.CenterOn(world, 0);
         }
 
         private void OnCoordTimerTick(object? sender, EventArgs e)
@@ -297,6 +530,109 @@ namespace GeoVision
                 _lastIdentifyRequest = null;
                 IdentifyBtn.IsChecked = false;
             }
+        }
+
+        private void OnRasterSwipeClick(object sender, RoutedEventArgs e)
+        {
+            bool enable = sender switch
+            {
+                ToggleButton toggle => toggle.IsChecked == true,
+                MenuItem menuItem => menuItem.IsChecked,
+                _ => false
+            };
+
+            if (!enable)
+            {
+                StopRasterSwipe();
+                return;
+            }
+
+            var options = _layerItems
+                .Where(item => item.Layer != null)
+                .Select(item => new
+                {
+                    item.Name,
+                    Provider = GetRasterProvider(item.Layer)
+                })
+                .Where(option => option.Provider != null)
+                .Select(option => new Dialogs.RasterSwipeLayerOption(
+                    option.Name,
+                    option.Provider!))
+                .ToList();
+
+            if (options.Count < 2)
+            {
+                SetRasterSwipeToggleState(false);
+                MessageBox.Show(
+                    "请先加载至少两幅栅格影像。",
+                    "卷帘对比",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new Dialogs.RasterSwipeDialog(options) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.LeftLayer == null || dialog.RightLayer == null)
+            {
+                SetRasterSwipeToggleState(false);
+                return;
+            }
+
+            if (_clipSelectionActive || _clipAdjustmentActive)
+                CancelRectangleClip();
+
+            _swipeLeftProvider = dialog.LeftLayer.Provider;
+            _swipeRightProvider = dialog.RightLayer.Provider;
+            _swipePosition = 0.5;
+            GpuRasterMap.ConfigureSwipe(_swipeLeftProvider, _swipeRightProvider, _swipePosition);
+
+            SwipeLeftLabelText.Text = $"左：{dialog.LeftLayer.Name}";
+            SwipeRightLabelText.Text = $"右：{dialog.RightLayer.Name}";
+            SwipeOverlayCanvas.Visibility = Visibility.Visible;
+            SetRasterSwipeToggleState(true);
+            UpdateSwipeOverlay();
+        }
+
+        private void StopRasterSwipe()
+        {
+            GpuRasterMap.ClearSwipe();
+            _swipeLeftProvider = null;
+            _swipeRightProvider = null;
+            SwipeOverlayCanvas.Visibility = Visibility.Collapsed;
+            SetRasterSwipeToggleState(false);
+        }
+
+        private void SetRasterSwipeToggleState(bool enabled)
+        {
+            RasterSwipeBtn.IsChecked = enabled;
+            RasterSwipeMenuItem.IsChecked = enabled;
+        }
+
+        private void OnSwipeThumbDragDelta(object sender, DragDeltaEventArgs e)
+        {
+            double width = SwipeOverlayCanvas.ActualWidth;
+            if (width <= 0)
+                return;
+
+            _swipePosition = Math.Clamp(_swipePosition + e.HorizontalChange / width, 0, 1);
+            GpuRasterMap.SetSwipePosition(_swipePosition);
+            UpdateSwipeOverlay();
+        }
+
+        private void OnSwipeOverlaySizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateSwipeOverlay();
+        }
+
+        private void UpdateSwipeOverlay()
+        {
+            double width = SwipeOverlayCanvas.ActualWidth;
+            double height = SwipeOverlayCanvas.ActualHeight;
+            if (width <= 0 || height <= 0)
+                return;
+
+            SwipeThumb.Height = height;
+            Canvas.SetLeft(SwipeThumb, width * _swipePosition - SwipeThumb.Width * 0.5);
         }
 
         private void OnLayerSearchTextChanged(object sender, TextChangedEventArgs e)
@@ -599,6 +935,9 @@ namespace GeoVision
 
         private void ClearAllLayers()
         {
+            if (GpuRasterMap.IsSwipeActive)
+                StopRasterSwipe();
+
             if (_clipSelectionActive || _clipAdjustmentActive)
                 CancelRectangleClip();
 
@@ -620,11 +959,13 @@ namespace GeoVision
                     layers.Remove(layers.Get(i));
             }
             GpuRasterMap.ClearRasterLayers();
+            ClearOverviewLayers();
 
             foreach (var item in itemsToDispose)
                 DisposeLayerItem(item);
 
             _layerItems.Clear();
+            UpdateOverviewVisibility();
 
             MapControl.Map?.Refresh();
         }
@@ -639,6 +980,49 @@ namespace GeoVision
             }
 
             return rasterLayers;
+        }
+
+        private List<Dialogs.VectorLayerInfo> GetLoadedVectorLayerInfos()
+        {
+            var vectorLayers = new List<Dialogs.VectorLayerInfo>();
+            foreach (var item in _layerItems)
+            {
+                if (item.Layer == null) continue;
+                string? path = GetShapeProvider(item.Layer)?.FilePath ?? GetVectorFilePath(item.Layer);
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue;
+                vectorLayers.Add(new Dialogs.VectorLayerInfo(
+                    item.Name,
+                    path,
+                    GetLayerCrs(item.Layer)));
+            }
+
+            return vectorLayers;
+        }
+
+        private async void OnVectorReprojection(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Dialogs.VectorReprojectionDialog(GetLoadedVectorLayerInfos())
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true || dialog.Request == null)
+                return;
+
+            try
+            {
+                ShowProgress("正在重投影矢量图层...");
+                var progress = new Progress<(int percent, string label)>(value =>
+                    UpdateProgress(value.label, value.percent));
+                await Services.VectorReprojectionService.RunAsync(dialog.Request, progress);
+                UpdateProgress("矢量重投影完成，正在加载结果...", 100);
+                LoadFilesAsync([dialog.Request.OutputPath]);
+            }
+            catch (Exception ex)
+            {
+                HideProgress();
+                MessageBox.Show(this, $"矢量重投影失败：\n{ex.Message}", "矢量重投影",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private async void OnDefineProjection(object sender, RoutedEventArgs e)
@@ -705,7 +1089,7 @@ namespace GeoVision
                     UpdateProgress("投影转换中...", percent));
                 await Services.RasterReprojectionService.RunAsync(
                     dialog.Request,
-                    process => _runningPythonProcess = process,
+                    process => SetRunningPythonProcess(process),
                     progress);
                 _runningPythonProcess = null;
 
@@ -728,6 +1112,7 @@ namespace GeoVision
             catch (Exception ex)
             {
                 _runningPythonProcess = null;
+                if (ConsumeCancellation()) return;
                 HideProgress();
                 MessageBox.Show(
                     this,
@@ -735,6 +1120,100 @@ namespace GeoVision
                     "投影转换",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
+            }
+        }
+
+        private async void OnMultiTemporalRegistration(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Dialogs.MultiTemporalRegistrationDialog(GetLoadedRasterLayerInfos())
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true || dialog.Request == null)
+                return;
+
+            try
+            {
+                KillRunningPythonProcess();
+                ShowProgress("正在进行多时相影像配准...");
+                var progress = new Progress<int>(percent =>
+                    UpdateProgress("正在进行多时相影像配准...", percent));
+                await Services.MultiTemporalRegistrationService.RunAsync(
+                    dialog.Request,
+                    process => SetRunningPythonProcess(process),
+                    progress);
+                _runningPythonProcess = null;
+
+                if (dialog.Request.LoadResult)
+                {
+                    UpdateProgress("配准完成，正在加载结果...", 100);
+                    LoadFilesAsync([dialog.Request.OutputPath]);
+                }
+                else
+                {
+                    HideProgress();
+                    MessageBox.Show(
+                        this,
+                        $"多时相影像配准完成：\n{dialog.Request.OutputPath}",
+                        "多时相影像配准",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                _runningPythonProcess = null;
+                if (ConsumeCancellation()) return;
+                HideProgress();
+                MessageBox.Show(
+                    this,
+                    $"多时相影像配准失败：\n{ex.Message}",
+                    "多时相影像配准",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private async void OnRasterMosaic(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Dialogs.RasterMosaicDialog(GetLoadedRasterLayerInfos())
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true || dialog.Request == null)
+                return;
+
+            try
+            {
+                KillRunningPythonProcess();
+                ShowProgress("正在拼接影像...");
+                var progress = new Progress<int>(percent =>
+                    UpdateProgress("正在匀色并融合重叠区域...", percent));
+                await Services.RasterMosaicService.RunAsync(
+                    dialog.Request,
+                    process => SetRunningPythonProcess(process),
+                    progress);
+                _runningPythonProcess = null;
+
+                if (dialog.Request.LoadResult)
+                {
+                    UpdateProgress("拼接完成，正在加载结果...", 100);
+                    LoadFilesAsync([dialog.Request.OutputPath]);
+                }
+                else
+                {
+                    HideProgress();
+                    MessageBox.Show(this, $"影像拼接完成：\n{dialog.Request.OutputPath}",
+                        "影像拼接", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                _runningPythonProcess = null;
+                if (ConsumeCancellation()) return;
+                HideProgress();
+                MessageBox.Show(this, $"影像拼接失败：\n{ex.Message}", "影像拼接",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -750,7 +1229,7 @@ namespace GeoVision
                 KillRunningPythonProcess();
                 ShowProgress("影像配准中...");
                 await Dialogs.RegistrationDialog.RunRegistrationAsync(dlg.Request,
-                    p => _runningPythonProcess = p);
+                    p => SetRunningPythonProcess(p));
                 if (dlg.Request.LoadAfterRegistration)
                 {
                     UpdateProgress("配准完成，正在加载结果...", 100);
@@ -766,6 +1245,7 @@ namespace GeoVision
             }
             catch (Exception ex)
             {
+                if (ConsumeCancellation()) return;
                 HideProgress();
                 MessageBox.Show($"影像配准失败: {ex.Message}", "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
@@ -800,7 +1280,7 @@ namespace GeoVision
                     try
                     {
                         await Dialogs.RegistrationDialog.RunRegistrationAsync(request,
-                            p => _runningPythonProcess = p,
+                            p => SetRunningPythonProcess(p),
                             taskProgress);
                         _runningPythonProcess = null;
                         completed++;
@@ -815,6 +1295,7 @@ namespace GeoVision
                     catch (Exception ex)
                     {
                         _runningPythonProcess = null;
+                        if (ConsumeCancellation()) return;
                         failures.Add($"{Path.GetFileName(request.MsPath)} + {Path.GetFileName(request.PanPath)}: {ex.Message}");
                         int failedOverallPercent = (int)Math.Round((i + 1) * 100.0 / requests.Count);
                         UpdateProgress(
@@ -842,6 +1323,7 @@ namespace GeoVision
             catch (Exception ex)
             {
                 _runningPythonProcess = null;
+                if (ConsumeCancellation()) return;
                 HideProgress();
                 MessageBox.Show($"批量影像配准失败: {ex.Message}", "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
@@ -887,7 +1369,7 @@ namespace GeoVision
                 var progress = new Progress<int>(percent =>
                     UpdateProgress("影像融合中...", percent));
                 await Dialogs.FusionDialog.RunInferenceAsync(dlg.Request,
-                    p => _runningPythonProcess = p,
+                    p => SetRunningPythonProcess(p),
                     progress);
                 _runningPythonProcess = null;
                 if (dlg.Request.LoadAfterFusion)
@@ -906,6 +1388,7 @@ namespace GeoVision
             catch (Exception ex)
             {
                 _runningPythonProcess = null;
+                if (ConsumeCancellation()) return;
                 HideProgress();
                 MessageBox.Show($"影像融合失败: {ex.Message}", "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
@@ -928,35 +1411,34 @@ namespace GeoVision
             {
                 KillRunningPythonProcess();
                 ShowProgress("批量影像融合中...");
-
-                for (int i = 0; i < requests.Count; i++)
+                var batchProgress = new Progress<Dialogs.BatchFusionProgress>(item =>
                 {
-                    var request = requests[i];
-                    attempted++;
-                    string progressLabel = $"批量融合 正在处理 {i + 1}/{requests.Count}: {Path.GetFileName(request.MsPath)}";
-                    var taskProgress = CreateBatchTaskProgress(progressLabel, i, requests.Count);
-                    taskProgress.Report(0);
+                    int overallPercent = (int)Math.Round(
+                        ((item.TaskIndex + item.Percent / 100d) / item.TaskCount) * 100d);
+                    string progressLabel =
+                        $"批量融合 正在处理 {item.TaskIndex + 1}/{item.TaskCount}: {Path.GetFileName(item.MsPath)}";
+                    UpdateProgress(progressLabel, Math.Clamp(overallPercent, 0, 100));
+                });
 
-                    try
-                    {
-                        await Dialogs.FusionDialog.RunInferenceAsync(request,
-                            p => _runningPythonProcess = p,
-                            taskProgress);
-                        _runningPythonProcess = null;
-                        completed++;
-                        taskProgress.Report(100);
+                var result = await Dialogs.FusionDialog.RunBatchInferenceAsync(
+                    requests,
+                    dlg.ContinueOnError,
+                    p => SetRunningPythonProcess(p),
+                    batchProgress);
+                _runningPythonProcess = null;
 
-                        if (request.LoadAfterFusion)
-                            outputsToLoad.Add(request.OutputPath);
-                    }
-                    catch (Exception ex)
-                    {
-                        _runningPythonProcess = null;
-                        failures.Add($"{Path.GetFileName(request.MsPath)} + {Path.GetFileName(request.PanPath)}: {ex.Message}");
-                        taskProgress.Report(100);
-                        if (!dlg.ContinueOnError)
-                            break;
-                    }
+                attempted = result.AttemptedCount;
+                completed = result.CompletedTaskIndices.Count;
+                foreach (int index in result.CompletedTaskIndices)
+                {
+                    if (requests[index].LoadAfterFusion)
+                        outputsToLoad.Add(requests[index].OutputPath);
+                }
+                foreach (var failure in result.Failures)
+                {
+                    var request = requests[failure.TaskIndex];
+                    failures.Add(
+                        $"{Path.GetFileName(request.MsPath)} + {Path.GetFileName(request.PanPath)}: {failure.Message}");
                 }
 
                 string summary = BuildBatchFusionSummary(requests.Count, attempted, completed, failures);
@@ -976,6 +1458,7 @@ namespace GeoVision
             catch (Exception ex)
             {
                 _runningPythonProcess = null;
+                if (ConsumeCancellation()) return;
                 HideProgress();
                 MessageBox.Show($"批量影像融合失败: {ex.Message}", "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
@@ -1139,10 +1622,19 @@ namespace GeoVision
 
         private void OnClipSelectionKeyDown(object sender, KeyEventArgs e)
         {
-            if ((!_clipSelectionActive && !_clipAdjustmentActive) || e.Key != Key.Escape)
+            if (e.Key != Key.Escape)
                 return;
-            CancelRectangleClip();
-            e.Handled = true;
+
+            if (_clipSelectionActive || _clipAdjustmentActive)
+            {
+                CancelRectangleClip();
+                e.Handled = true;
+            }
+            else if (GpuRasterMap.IsSwipeActive)
+            {
+                StopRasterSwipe();
+                e.Handled = true;
+            }
         }
 
         private void OnClipSelectionMouseDown(object sender, MouseButtonEventArgs e)
@@ -1726,6 +2218,8 @@ namespace GeoVision
                 return;
             }
 
+            projectPath = Path.GetFullPath(projectPath);
+
             // Prompt to save current project first
             if (!PromptToSaveCurrentProject("打开项目"))
                 return;
@@ -1743,6 +2237,10 @@ namespace GeoVision
                     MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
+
+            string projectDirectory = Path.GetDirectoryName(projectPath)!;
+            foreach (var entry in project.Layers)
+                entry.FilePath = ResolveProjectLayerPath(projectDirectory, entry.FilePath);
 
             // Validate file paths exist
             var missing = project.Layers
@@ -1799,7 +2297,9 @@ namespace GeoVision
                     }
 
                     string crs = GetLayerCrs(layer);
-                    CheckCrsMismatch(crs, entry.Name);
+                    layer = await ResolveCrsMismatchAsync(layer, entry.FilePath, entry.Name);
+                    if (layer == null) continue;
+                    ApplySavedRasterSettings(layer, entry);
                     AddLayerToRenderer(layer);
                     AddLayerItem(layer);
                 }
@@ -1848,6 +2348,7 @@ namespace GeoVision
         private async void LoadFilesAsync(string[] filePaths)
         {
             ShowProgress("正在加载...");
+            await Dispatcher.Yield(DispatcherPriority.Render);
             int fileIndex = 0;
             foreach (var path in filePaths)
             {
@@ -1857,8 +2358,8 @@ namespace GeoVision
                     var layer = await Task.Run(async () => await DataLoader.LoadAsync(path, loadProgress));
                     if (layer != null)
                     {
-                        string crs = GetLayerCrs(layer);
-                        CheckCrsMismatch(crs, Path.GetFileName(path));
+                        layer = await ResolveCrsMismatchAsync(layer, path, Path.GetFileName(path));
+                        if (layer == null) continue;
                         AddLayerToRenderer(layer);
                         AddLayerItem(layer);
                     }
@@ -1897,9 +2398,13 @@ namespace GeoVision
 
         private string? _mapCrs;
 
-        private void CheckCrsMismatch(string layerCrs, string fileName)
+        private async Task<ILayer?> ResolveCrsMismatchAsync(
+            ILayer layer,
+            string sourcePath,
+            string fileName)
         {
-            if (string.IsNullOrWhiteSpace(layerCrs) || layerCrs == "未知") return;
+            string layerCrs = GetLayerCrs(layer);
+            if (string.IsNullOrWhiteSpace(layerCrs) || layerCrs == "未知") return layer;
 
             string? referenceCrs = _mapCrs ?? GetFirstKnownLayerCrs();
             if (string.IsNullOrWhiteSpace(referenceCrs))
@@ -1907,7 +2412,7 @@ namespace GeoVision
                 _mapCrs = layerCrs;
                 if (MapControl.Map != null)
                     MapControl.Map.CRS = layerCrs;
-                return;
+                return layer;
             }
 
             _mapCrs = referenceCrs;
@@ -1915,18 +2420,103 @@ namespace GeoVision
             string keyLayer = CoordinateConverter.GetEpsgComparisonKey(layerCrs);
             if (!string.IsNullOrEmpty(keyMap) &&
                 string.Equals(keyMap, keyLayer, StringComparison.OrdinalIgnoreCase))
-                return;
+                return layer;
 
             string mapName = CoordinateConverter.GetCrsDisplayName(referenceCrs);
             string layerName = CoordinateConverter.GetCrsDisplayName(layerCrs);
-            MessageBox.Show(
-                this,
-                $"坐标系不一致:\n\n" +
-                $"  当前地图: {mapName}\n" +
-                $"  {fileName}: {layerName}\n\n" +
-                $"不同坐标系的数据叠加可能存在位置偏差。\n" +
-                $"可使用“工具 → 坐标系统 → 投影转换（重投影）”转换到统一坐标系。",
-                "坐标系提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            bool canReproject = GetRasterProvider(layer) != null &&
+                                File.Exists(sourcePath) &&
+                                SpatialReferenceHelper.TryParse(referenceCrs, out _, out _);
+            var dialog = new Dialogs.CrsMismatchDialog(fileName, mapName, layerName, canReproject)
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true || dialog.Action == Dialogs.CrsMismatchAction.Cancel)
+            {
+                DisposeUntrackedLayer(layer);
+                return null;
+            }
+
+            if (dialog.Action != Dialogs.CrsMismatchAction.Reproject || !canReproject)
+                return layer;
+
+            string tempDirectory = Path.Combine(Path.GetTempPath(), "GeoVision", "reprojected");
+            Directory.CreateDirectory(tempDirectory);
+            string tempPath = Path.Combine(
+                tempDirectory,
+                $"{Path.GetFileNameWithoutExtension(sourcePath)}_to_{SanitizeFileName(referenceCrs)}_{Guid.NewGuid():N}.tif");
+
+            try
+            {
+                ShowProgress($"正在将 {fileName} 重投影到当前地图坐标系...");
+                var progress = new Progress<int>(percent =>
+                    UpdateProgress($"正在重投影 {fileName}...", percent));
+                await Services.RasterReprojectionService.RunAsync(
+                    new Services.RasterReprojectionRequest(
+                        sourcePath,
+                        tempPath,
+                        referenceCrs,
+                        "bilinear",
+                        null,
+                        true),
+                    process => SetRunningPythonProcess(process),
+                    progress);
+                _runningPythonProcess = null;
+
+                DisposeUntrackedLayer(layer);
+                var loadProgress = CreateLoadProgress(tempPath, 0, 1);
+                var reprojected = await Task.Run(async () =>
+                    await DataLoader.LoadAsync(tempPath, loadProgress));
+                if (reprojected == null)
+                    throw new InvalidDataException("重投影完成，但无法重新加载结果影像。");
+
+                reprojected.Name = layer.Name;
+                reprojected.Enabled = layer.Enabled;
+                return reprojected;
+            }
+            catch
+            {
+                _runningPythonProcess = null;
+                TryDeleteTempRaster(tempPath);
+                throw;
+            }
+        }
+
+        private static void DisposeUntrackedLayer(ILayer layer)
+        {
+            if (GetRasterProvider(layer) is { } rasterProvider)
+                rasterProvider.Dispose();
+        }
+
+        private static string SanitizeFileName(string value)
+        {
+            string safe = string.IsNullOrWhiteSpace(value) ? "map" : value;
+            foreach (char invalid in Path.GetInvalidFileNameChars())
+                safe = safe.Replace(invalid, '_');
+            return safe.Length > 48 ? safe[..48] : safe;
+        }
+
+        private static void TryDeleteTempRaster(string path)
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+                if (File.Exists(path + ".msk")) File.Delete(path + ".msk");
+                if (File.Exists(path + ".ovr")) File.Delete(path + ".ovr");
+            }
+            catch { }
+        }
+
+        private static void ApplySavedRasterSettings(ILayer layer, Models.LayerEntry entry)
+        {
+            var rp = GetRasterProvider(layer);
+            if (rp == null) return;
+            if (entry.StretchType != null && Enum.TryParse(entry.StretchType, out Services.StretchType st))
+                rp.ChangeStretch(st);
+            if (entry.ColorRamp != null && Enum.TryParse(entry.ColorRamp, out Services.ColorRampType cr))
+                rp.ChangeColorRamp(cr);
+            if (entry.BandIndexes is { Length: 3 }) rp.ChangeBands(entry.BandIndexes);
+            if (entry.Opacity.HasValue) rp.ChangeOpacity(entry.Opacity.Value);
         }
 
         private string? GetFirstKnownLayerCrs()
@@ -1992,7 +2582,15 @@ namespace GeoVision
         private void RemoveLayerFromRenderer(LayerItem item)
         {
             if (GetRasterProvider(item.Layer) is { } rp)
+            {
+                if (ReferenceEquals(rp, _swipeLeftProvider) ||
+                    ReferenceEquals(rp, _swipeRightProvider))
+                {
+                    StopRasterSwipe();
+                }
+
                 GpuRasterMap.RemoveRasterLayer(rp);
+            }
 
             if (item.Layer != null)
                 MapControl.Map?.Layers.Remove(item.Layer);
@@ -2017,6 +2615,7 @@ namespace GeoVision
                 GpuRasterMap.RefreshRasterLayer(rp);
             else
                 MapControl.Map?.Refresh();
+            RefreshOverviewMap();
         }
 
         private void SyncLayerRenderOrder()
@@ -2050,6 +2649,8 @@ namespace GeoVision
 
                 layers.Insert(insertIndex++, layer);
             }
+
+            RefreshOverviewMap();
         }
 
         private IEnumerable<(ILayer Layer, Providers.GdalRasterProvider Provider)> RasterLayerItems()
@@ -2120,6 +2721,7 @@ namespace GeoVision
             item.PropertyChanged += OnLayerItemPropertyChanged;
             _layerItems.Insert(0, item);
             _layerItemsView?.Refresh();
+            RefreshOverviewMap();
             return crs;
         }
 
@@ -2138,6 +2740,8 @@ namespace GeoVision
         private void SaveProject(string filePath)
         {
             var project = new Models.ProjectFile();
+            string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath))!;
+            project.Version = 2;
 
             // Layer list is shown top-to-bottom; save bottom-to-top so reload preserves draw order.
             foreach (var item in _layerItems.Reverse())
@@ -2156,7 +2760,7 @@ namespace GeoVision
 
                 if (rp != null)
                 {
-                    entry.FilePath = rp.FilePath;
+                    entry.FilePath = ToProjectLayerPath(projectDirectory, rp.FilePath);
                     entry.Type = "raster";
                     entry.StretchType = rp.CurrentStretchType.ToString();
                     entry.ColorRamp = rp.Stretch.ColorRamp.ToString();
@@ -2166,13 +2770,13 @@ namespace GeoVision
                 }
                 else if (sfp != null)
                 {
-                    entry.FilePath = sfp.FilePath;
+                    entry.FilePath = ToProjectLayerPath(projectDirectory, sfp.FilePath);
                     entry.Type = "vector";
                 }
                 else if (layer.Tag is string vectorPath &&
                          Path.GetExtension(vectorPath).ToLowerInvariant() is ".geojson" or ".json")
                 {
-                    entry.FilePath = vectorPath;
+                    entry.FilePath = ToProjectLayerPath(projectDirectory, vectorPath);
                     entry.Type = "vector";
                 }
                 else
@@ -2197,6 +2801,22 @@ namespace GeoVision
                 MessageBox.Show($"保存失败:\n{ex.Message}", "GeoVision",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        private static string ResolveProjectLayerPath(string projectDirectory, string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                return string.Empty;
+            return Path.GetFullPath(Path.IsPathRooted(filePath)
+                ? filePath
+                : Path.Combine(projectDirectory, filePath));
+        }
+
+        private static string ToProjectLayerPath(string projectDirectory, string filePath)
+        {
+            string fullPath = Path.GetFullPath(filePath);
+            string relative = Path.GetRelativePath(projectDirectory, fullPath);
+            return relative == "." ? Path.GetFileName(fullPath) : relative;
         }
 
         private void OnZoomInClick(object sender, RoutedEventArgs e)
@@ -2265,6 +2885,7 @@ namespace GeoVision
                     GpuRasterMap.SetLayerVisibility(rp, item.IsVisible);
                 else
                     MapControl.Map?.Refresh();
+                RefreshOverviewMap();
             }
         }
 
@@ -2299,6 +2920,7 @@ namespace GeoVision
                     GpuRasterMap.SetLayerVisibility(rp, item.IsVisible);
                 else
                     MapControl.Map?.Refresh();
+                RefreshOverviewMap();
             }
         }
 
@@ -2363,9 +2985,11 @@ namespace GeoVision
 
             bool hasAttrTable = false;
             if (_rightClickedItem.Layer is Mapsui.Layers.Layer l)
-                hasAttrTable = l.DataSource is Services.DataLoader.ShapeFileProvider;
+                hasAttrTable = l.DataSource is Services.DataLoader.ShapeFileProvider ||
+                               IsGeoJsonLayer(_rightClickedItem.Layer);
             if (!hasAttrTable)
-                hasAttrTable = _rightClickedItem.Layer?.Tag is Services.DataLoader.ShapeFileProvider;
+                hasAttrTable = _rightClickedItem.Layer?.Tag is Services.DataLoader.ShapeFileProvider ||
+                               IsGeoJsonLayer(_rightClickedItem.Layer);
 
             _layerPopup = new Popup
             {
@@ -2549,7 +3173,16 @@ namespace GeoVision
 
             if (sfp == null)
             {
-                MessageBox.Show("仅 Shapefile 图层支持属性表。", "提示",
+                if (IsGeoJsonLayer(item.Layer) && TryReadGeoJsonAttributeTable(
+                        GetVectorFilePath(item.Layer)!, out var geoJsonTable, out int geoJsonCount))
+                {
+                    var geoJsonDialog = new Dialogs.AttributeTableDialog(
+                        item.Name, geoJsonTable, geoJsonCount) { Owner = this };
+                    geoJsonDialog.Show();
+                    return;
+                }
+
+                MessageBox.Show("当前图层没有可读取的属性表数据。", "提示",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -2584,6 +3217,105 @@ namespace GeoVision
             dlg.Show();
         }
 
+        private static bool IsGeoJsonLayer(ILayer? layer)
+        {
+            string? path = GetVectorFilePath(layer);
+            return path != null &&
+                   Path.GetExtension(path).ToLowerInvariant() is ".geojson" or ".json";
+        }
+
+        private static string? GetVectorFilePath(ILayer? layer)
+        {
+            if (layer?.Tag is string path && !string.IsNullOrWhiteSpace(path))
+                return path;
+            return null;
+        }
+
+        private static bool TryReadGeoJsonAttributeTable(
+            string path,
+            out System.Data.DataTable table,
+            out int featureCount)
+        {
+            table = new System.Data.DataTable();
+            table.Columns.Add("FID", typeof(int));
+            featureCount = 0;
+
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                var features = new List<JsonElement>();
+                if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("type", out var typeElement) &&
+                    string.Equals(typeElement.GetString(), "FeatureCollection", StringComparison.OrdinalIgnoreCase) &&
+                    root.TryGetProperty("features", out var featureArray) &&
+                    featureArray.ValueKind == JsonValueKind.Array)
+                {
+                    features.AddRange(featureArray.EnumerateArray());
+                }
+                else if (root.ValueKind == JsonValueKind.Object &&
+                         root.TryGetProperty("type", out var singleTypeElement) &&
+                         string.Equals(singleTypeElement.GetString(), "Feature", StringComparison.OrdinalIgnoreCase))
+                {
+                    features.Add(root);
+                }
+                else
+                {
+                    return false;
+                }
+
+                featureCount = features.Count;
+                var properties = new List<Dictionary<string, string>>(Math.Min(features.Count, 10_000));
+                var fieldNames = new List<string>();
+                var fieldSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var feature in features.Take(10_000))
+                {
+                    var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (feature.ValueKind == JsonValueKind.Object &&
+                        feature.TryGetProperty("properties", out var propertyObject) &&
+                        propertyObject.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var property in propertyObject.EnumerateObject())
+                        {
+                            string field = string.IsNullOrWhiteSpace(property.Name) ? "字段" : property.Name;
+                            if (!fieldSet.Contains(field))
+                            {
+                                fieldSet.Add(field);
+                                fieldNames.Add(field);
+                            }
+                            values[field] = property.Value.ValueKind switch
+                            {
+                                JsonValueKind.Null => "",
+                                JsonValueKind.String => property.Value.GetString() ?? "",
+                                _ => property.Value.GetRawText()
+                            };
+                        }
+                    }
+                    properties.Add(values);
+                }
+
+                foreach (string field in fieldNames)
+                    table.Columns.Add(field, typeof(string));
+                for (int index = 0; index < properties.Count; index++)
+                {
+                    var row = table.NewRow();
+                    row["FID"] = index;
+                    foreach (string field in fieldNames)
+                        row[field] = properties[index].TryGetValue(field, out string? value) ? value : "";
+                    table.Rows.Add(row);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GeoJSON attribute table failed: {ex}");
+                table = new System.Data.DataTable();
+                featureCount = 0;
+                return false;
+            }
+        }
+
         private void OnLayerProperties(object sender, RoutedEventArgs e)
         {
             var item = GetLayerItemFromSender(sender);
@@ -2605,6 +3337,8 @@ namespace GeoVision
             string layerType, filePath;
             int? rasterW = null, rasterH = null, bandCount = null, overviewCount = null, featureCount = null;
             string? renderer = null, stretchType = null, encoding = null;
+            double? pixelSizeX = null, pixelSizeY = null;
+            string? pixelSizeUnit = null;
 
             if (rp != null)
             {
@@ -2616,6 +3350,9 @@ namespace GeoVision
                 renderer = rp.RendererType.ToString();
                 overviewCount = rp.OverviewCount;
                 stretchType = rp.CurrentStretchType.ToString();
+                pixelSizeX = rp.PixelSizeX;
+                pixelSizeY = rp.PixelSizeY;
+                pixelSizeUnit = rp.PixelSizeUnit;
             }
             else if (sfp != null)
             {
@@ -2638,12 +3375,17 @@ namespace GeoVision
                 string rawCrs = (rp?.RasterCrs ?? sfp?.CRS) ?? "";
                 if (!string.IsNullOrEmpty(rawCrs) && rawCrs != "未知")
                 {
-                    var (ll1Lon, ll1Lat) = CoordinateConverter.ToLonLat(extent.MinX, extent.MinY, rawCrs);
-                    var (ll2Lon, ll2Lat) = CoordinateConverter.ToLonLat(extent.MaxX, extent.MaxY, rawCrs);
-                    minX = Math.Min(ll1Lon, ll2Lon);
-                    maxX = Math.Max(ll1Lon, ll2Lon);
-                    minY = Math.Min(ll1Lat, ll2Lat);
-                    maxY = Math.Max(ll1Lat, ll2Lat);
+                    var corners = new[]
+                    {
+                        CoordinateConverter.ToLonLat(extent.MinX, extent.MinY, rawCrs),
+                        CoordinateConverter.ToLonLat(extent.MinX, extent.MaxY, rawCrs),
+                        CoordinateConverter.ToLonLat(extent.MaxX, extent.MinY, rawCrs),
+                        CoordinateConverter.ToLonLat(extent.MaxX, extent.MaxY, rawCrs)
+                    };
+                    minX = corners.Min(corner => corner.Lon);
+                    maxX = corners.Max(corner => corner.Lon);
+                    minY = corners.Min(corner => corner.Lat);
+                    maxY = corners.Max(corner => corner.Lat);
                     isLonLat = true;
                 }
             }
@@ -2652,7 +3394,7 @@ namespace GeoVision
                 item.Name, layerType, filePath, item.Crs,
                 minX, minY, maxX, maxY, isLonLat,
                 rasterW, rasterH, bandCount, renderer, overviewCount, stretchType,
-                featureCount, encoding)
+                featureCount, encoding, pixelSizeX, pixelSizeY, pixelSizeUnit)
             { Owner = this };
             dlg.ShowDialog();
         }
@@ -2702,6 +3444,7 @@ namespace GeoVision
 
             RecalculateMapCrs();
             MapControl.Map?.Refresh();
+            RefreshOverviewMap();
         }
 
         private void OnLayerRemove(object sender, RoutedEventArgs e)
@@ -2729,6 +3472,7 @@ namespace GeoVision
                 DeleteTempFile(fileToDelete);
             RecalculateMapCrs();
             MapControl.Map?.Refresh();
+            RefreshOverviewMap();
         }
 
         private LayerItem? GetLayerItemFromSender(object sender)

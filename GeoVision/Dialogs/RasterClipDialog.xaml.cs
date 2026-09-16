@@ -104,6 +104,21 @@ namespace GeoVision.Dialogs
                 return;
             }
 
+            output = Path.GetFullPath(output);
+            if (string.IsNullOrWhiteSpace(Path.GetExtension(output)))
+                output += ".tif";
+            if (string.Equals(Path.GetFullPath(raster.FilePath), output,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, "输出文件不能覆盖输入影像。", "影像裁剪",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (File.Exists(output) && MessageBox.Show(this,
+                    "输出文件已经存在，是否覆盖？", "影像裁剪",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
             string? vectorPath = null;
             if (SelectedMode == RasterClipMode.VectorBoundary)
             {
@@ -118,7 +133,7 @@ namespace GeoVision.Dialogs
 
             Request = new RasterClipRequest(
                 raster.FilePath,
-                Path.GetFullPath(output),
+                output,
                 SelectedMode,
                 vectorPath,
                 LoadResultBox.IsChecked == true);

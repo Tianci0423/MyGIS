@@ -467,6 +467,7 @@ namespace GeoVision.Dialogs
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             await process.WaitForExitAsync();
+            process.WaitForExit();
 
             if (process.ExitCode != 0)
             {

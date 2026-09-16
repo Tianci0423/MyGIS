@@ -361,7 +361,7 @@ namespace GeoVision.Dialogs
                     null,
                     32,
                     false,
-                    false,
+                    true,
                     LoadAfterFusionBox.IsChecked == true));
             }
 

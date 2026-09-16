@@ -11,7 +11,9 @@ namespace GeoVision.Dialogs
             int? rasterWidth = null, int? rasterHeight = null,
             int? bandCount = null, string? renderer = null,
             int? overviewCount = null, string? stretchType = null,
-            int? featureCount = null, string? encoding = null)
+            int? featureCount = null, string? encoding = null,
+            double? pixelSizeX = null, double? pixelSizeY = null,
+            string? pixelSizeUnit = null)
         {
             InitializeComponent();
 
@@ -46,6 +48,8 @@ namespace GeoVision.Dialogs
                 RendererText.Text = renderer ?? "—";
                 OverviewText.Text = overviewCount!.Value.ToString();
                 StretchText.Text = stretchType ?? "—";
+                PixelSizeXText.Text = FormatPixelSize(pixelSizeX, pixelSizeUnit);
+                PixelSizeYText.Text = FormatPixelSize(pixelSizeY, pixelSizeUnit);
             }
             else if (featureCount.HasValue)
             {
@@ -53,6 +57,16 @@ namespace GeoVision.Dialogs
                 FeatureCountText.Text = featureCount.Value.ToString("N0");
                 EncodingText.Text = encoding ?? "—";
             }
+        }
+
+        private static string FormatPixelSize(double? value, string? unit)
+        {
+            if (!value.HasValue ||
+                double.IsNaN(value.Value) || double.IsInfinity(value.Value) || value.Value <= 0)
+                return "—";
+
+            string suffix = string.IsNullOrWhiteSpace(unit) ? "" : $" {unit}";
+            return $"{value.Value.ToString("G10")}{suffix}";
         }
 
         private void OnCloseClick(object sender, RoutedEventArgs e) => Close();

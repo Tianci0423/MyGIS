@@ -73,6 +73,37 @@ namespace GeoVision.Services
 
         public static int GetBandCount(Dataset ds) => ds.RasterCount;
 
+        public static bool HasFiniteDisplayPixels(Dataset ds, IReadOnlyList<int> bandIndexes)
+        {
+            foreach (int bandIndex in bandIndexes)
+            {
+                if (!TryGetBand(ds, bandIndex, out var band) || band == null)
+                    return false;
+
+                int width = Math.Max(1, Math.Min(band.XSize, 256));
+                int height = Math.Max(1, Math.Min(band.YSize, 256));
+                var values = new float[width * height];
+                try
+                {
+                    Gdal.SetThreadLocalConfigOption("GDAL_RASTERIO_RESAMPLING", "NEAREST");
+                    band.ReadRaster(0, 0, band.XSize, band.YSize, values, width, height, 0, 0);
+                }
+                catch
+                {
+                    return false;
+                }
+
+                band.GetNoDataValue(out double noData, out int hasNoData);
+                bool hasFiniteValue = values.Any(value =>
+                    float.IsFinite(value) &&
+                    (hasNoData == 0 || Math.Abs(value - noData) >= 0.0001));
+                if (!hasFiniteValue)
+                    return false;
+            }
+
+            return bandIndexes.Count > 0;
+        }
+
         private static bool TryGetBand(Dataset ds, int bandIndex, out Band? band)
         {
             band = null;

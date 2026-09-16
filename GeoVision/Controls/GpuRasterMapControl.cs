@@ -72,6 +72,9 @@ namespace GeoVision.Controls
         private long _frame;
         private long _viewportRevision;
         private int _disposed;
+        private GdalRasterProvider? _swipeLeftProvider;
+        private GdalRasterProvider? _swipeRightProvider;
+        private double _swipePosition = 0.5;
 
         public event EventHandler? ViewportChanged;
 
@@ -111,6 +114,7 @@ namespace GeoVision.Controls
         }
 
         public bool HasRasterLayers => _layers.Count > 0;
+        public bool IsSwipeActive => _swipeLeftProvider != null && _swipeRightProvider != null;
         public double Resolution => _resolution;
 
         public MRect? ViewExtent
@@ -185,6 +189,13 @@ namespace GeoVision.Controls
 
         public void RemoveRasterLayer(GdalRasterProvider provider)
         {
+            if (ReferenceEquals(provider, _swipeLeftProvider) ||
+                ReferenceEquals(provider, _swipeRightProvider))
+            {
+                _swipeLeftProvider = null;
+                _swipeRightProvider = null;
+            }
+
             _layers.RemoveAll(l => ReferenceEquals(l.Provider, provider));
             DropTilesFor(provider);
 
@@ -199,6 +210,8 @@ namespace GeoVision.Controls
 
         public void ClearRasterLayers()
         {
+            _swipeLeftProvider = null;
+            _swipeRightProvider = null;
             _layers.Clear();
             _pendingZoomExtent = null;
             DropAllTiles();
@@ -219,6 +232,49 @@ namespace GeoVision.Controls
         public void RefreshRasterLayer(GdalRasterProvider provider)
         {
             DropTilesFor(provider);
+            RequestFrame();
+        }
+
+        public void ConfigureSwipe(
+            GdalRasterProvider leftProvider,
+            GdalRasterProvider rightProvider,
+            double position = 0.5)
+        {
+            if (ReferenceEquals(leftProvider, rightProvider))
+                throw new ArgumentException("卷帘对比需要选择两幅不同的栅格影像。");
+            if (!_layers.Any(layer => ReferenceEquals(layer.Provider, leftProvider)) ||
+                !_layers.Any(layer => ReferenceEquals(layer.Provider, rightProvider)))
+            {
+                throw new InvalidOperationException("卷帘影像必须已经加载到地图中。");
+            }
+
+            _swipeLeftProvider = leftProvider;
+            _swipeRightProvider = rightProvider;
+            _swipePosition = Math.Clamp(position, 0, 1);
+            Visibility = Visibility.Visible;
+            RequestFrame();
+        }
+
+        public void SetSwipePosition(double position)
+        {
+            double normalized = Math.Clamp(position, 0, 1);
+            if (Math.Abs(normalized - _swipePosition) < 0.0001)
+                return;
+
+            _swipePosition = normalized;
+            RequestFrame();
+        }
+
+        public void ClearSwipe()
+        {
+            if (!IsSwipeActive)
+                return;
+
+            _swipeLeftProvider = null;
+            _swipeRightProvider = null;
+            Visibility = _layers.Any(layer => layer.IsVisible)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             RequestFrame();
         }
 
@@ -261,6 +317,21 @@ namespace GeoVision.Controls
 
             _pendingZoomExtent = null;
             ApplyZoomToExtent(extent, width, height);
+        }
+
+        public void CenterOn(MPoint worldPoint)
+        {
+            if (!HasRasterLayers ||
+                double.IsNaN(worldPoint.X) || double.IsInfinity(worldPoint.X) ||
+                double.IsNaN(worldPoint.Y) || double.IsInfinity(worldPoint.Y))
+            {
+                return;
+            }
+
+            _zoomAnimating = false;
+            _centerX = worldPoint.X;
+            _centerY = worldPoint.Y;
+            OnViewportChanged();
         }
 
         private void ApplyZoomToExtent(MRect extent, double width, double height)
@@ -385,99 +456,125 @@ namespace GeoVision.Controls
             double scaleY = height > 0 ? fbH / height : 1;
             long viewportRevision = Volatile.Read(ref _viewportRevision);
 
-            foreach (var layer in _layers.Where(l => l.IsVisible))
+            var layersToRender = IsSwipeActive
+                ? _layers.Where(layer =>
+                    ReferenceEquals(layer.Provider, _swipeLeftProvider) ||
+                    ReferenceEquals(layer.Provider, _swipeRightProvider))
+                : _layers.Where(layer => layer.IsVisible);
+
+            foreach (var layer in layersToRender)
             {
-                bool pixelInspection = IsPixelInspectionActive(layer.Provider);
-                var renderSettings = GetRenderSettings(layer.Provider, pixelInspection);
-                var requests = layer.Provider.CreateGpuTileRequests(
-                    view, _resolution, renderSettings.TileGridPixels,
-                    renderSettings.RenderPixels, renderSettings.TileMargin);
+                bool swipeScissorEnabled = false;
+                if (IsSwipeActive)
+                {
+                    int split = Math.Clamp((int)Math.Round(fbW * _swipePosition), 0, fbW);
+                    bool isLeft = ReferenceEquals(layer.Provider, _swipeLeftProvider);
+                    int scissorX = isLeft ? 0 : split;
+                    int scissorWidth = isLeft ? split : fbW - split;
+                    GL.Enable(EnableCap.ScissorTest);
+                    GL.Scissor(scissorX, 0, scissorWidth, fbH);
+                    swipeScissorEnabled = true;
+                }
 
-                double viewCenterX = (view.MinX + view.MaxX) * 0.5;
-                double viewCenterY = (view.MinY + view.MaxY) * 0.5;
-                var requestPriorities = requests
-                    .Select(request =>
-                    {
-                        bool intersectsView = request.Extent.Intersects(view);
-                        double tileCenterX = (request.Extent.MinX + request.Extent.MaxX) * 0.5;
-                        double tileCenterY = (request.Extent.MinY + request.Extent.MaxY) * 0.5;
-                        double dx = tileCenterX - viewCenterX;
-                        double dy = tileCenterY - viewCenterY;
-                        return new PrioritizedTileRequest(
-                            request,
-                            intersectsView,
-                            dx * dx + dy * dy,
-                            Math.Abs(dx),
-                            Math.Abs(dy));
-                    })
-                    .ToList();
-                var prioritizedRequests = layer.Provider.UsesFullWidthStrips && pixelInspection
-                    ? requestPriorities
-                        .OrderBy(request => request.IntersectsView ? 0 : 1)
-                        .ThenBy(request => request.VerticalDistance)
-                        .ThenBy(request => request.HorizontalDistance)
-                        .ToList()
-                    : requestPriorities
-                        .OrderBy(request => request.IntersectsView ? 0 : 1)
-                        .ThenBy(request => request.DistanceSquared)
+                try
+                {
+                    bool pixelInspection = IsPixelInspectionActive(layer.Provider);
+                    var renderSettings = GetRenderSettings(layer.Provider, pixelInspection);
+                    var requests = layer.Provider.CreateGpuTileRequests(
+                        view, _resolution, renderSettings.TileGridPixels,
+                        renderSettings.RenderPixels, renderSettings.TileMargin);
+
+                    double viewCenterX = (view.MinX + view.MaxX) * 0.5;
+                    double viewCenterY = (view.MinY + view.MaxY) * 0.5;
+                    var requestPriorities = requests
+                        .Select(request =>
+                        {
+                            bool intersectsView = request.Extent.Intersects(view);
+                            double tileCenterX = (request.Extent.MinX + request.Extent.MaxX) * 0.5;
+                            double tileCenterY = (request.Extent.MinY + request.Extent.MaxY) * 0.5;
+                            double dx = tileCenterX - viewCenterX;
+                            double dy = tileCenterY - viewCenterY;
+                            return new PrioritizedTileRequest(
+                                request,
+                                intersectsView,
+                                dx * dx + dy * dy,
+                                Math.Abs(dx),
+                                Math.Abs(dy));
+                        })
                         .ToList();
+                    var prioritizedRequests = layer.Provider.UsesFullWidthStrips && pixelInspection
+                        ? requestPriorities
+                            .OrderBy(request => request.IntersectsView ? 0 : 1)
+                            .ThenBy(request => request.VerticalDistance)
+                            .ThenBy(request => request.HorizontalDistance)
+                            .ToList()
+                        : requestPriorities
+                            .OrderBy(request => request.IntersectsView ? 0 : 1)
+                            .ThenBy(request => request.DistanceSquared)
+                            .ToList();
 
-                var loadedTiles = new List<VisibleLoadedTile>(requests.Count);
-                bool hasMissingVisibleTile = false;
+                    var loadedTiles = new List<VisibleLoadedTile>(requests.Count);
+                    bool hasMissingVisibleTile = false;
 
-                foreach (var prioritized in prioritizedRequests)
-                {
-                    var request = prioritized.Request;
-                    var key = CreateTileKey(layer.Provider, request);
-                    bool hasFinalQuality = HasCompatibleTexture(key);
-
-                    if (TryGetBestTexture(key, out var tile))
+                    foreach (var prioritized in prioritizedRequests)
                     {
-                        if (prioritized.IntersectsView)
-                            loadedTiles.Add(new VisibleLoadedTile(key, tile));
+                        var request = prioritized.Request;
+                        var key = CreateTileKey(layer.Provider, request);
+                        bool hasFinalQuality = HasCompatibleTexture(key);
+
+                        if (TryGetBestTexture(key, out var tile))
+                        {
+                            if (prioritized.IntersectsView)
+                                loadedTiles.Add(new VisibleLoadedTile(key, tile));
+                        }
+
+                        if (prioritized.IntersectsView && !hasFinalQuality)
+                            hasMissingVisibleTile = true;
                     }
 
-                    if (prioritized.IntersectsView && !hasFinalQuality)
-                        hasMissingVisibleTile = true;
-                }
-
-                if (requests.Count > 0 && layer.Provider.Opacity >= 0.999d)
-                    DrawCachedBackdrop(
-                        layer.Provider,
-                        requests[0].Generation,
-                        requests[0].Level,
-                        view,
-                        scaleX,
-                        scaleY,
-                        pixelInspection);
-
-                foreach (var loaded in loadedTiles)
-                    DrawTile(
-                        loaded.Tile,
-                        scaleX,
-                        scaleY,
-                        pixelInspection && loaded.Key.Level == 0,
-                        (float)layer.Provider.Opacity);
-
-                foreach (var prioritized in prioritizedRequests)
-                {
-                    var key = CreateTileKey(layer.Provider, prioritized.Request);
-                    if (!HasCompatibleTexture(key))
-                    {
-                        ScheduleTileLoad(
+                    if (requests.Count > 0 && layer.Provider.Opacity >= 0.999d)
+                        DrawCachedBackdrop(
                             layer.Provider,
-                            prioritized.Request,
-                            key,
-                            viewportRevision,
-                            isPrefetch: !prioritized.IntersectsView);
+                            requests[0].Generation,
+                            requests[0].Level,
+                            view,
+                            scaleX,
+                            scaleY,
+                            pixelInspection);
+
+                    foreach (var loaded in loadedTiles)
+                        DrawTile(
+                            loaded.Tile,
+                            scaleX,
+                            scaleY,
+                            pixelInspection && loaded.Key.Level == 0,
+                            (float)layer.Provider.Opacity);
+
+                    foreach (var prioritized in prioritizedRequests)
+                    {
+                        var key = CreateTileKey(layer.Provider, prioritized.Request);
+                        if (!HasCompatibleTexture(key))
+                        {
+                            ScheduleTileLoad(
+                                layer.Provider,
+                                prioritized.Request,
+                                key,
+                                viewportRevision,
+                                isPrefetch: !prioritized.IntersectsView);
+                        }
                     }
+
+                    if (!hasMissingVisibleTile && IsDetailPrefetchActive(layer.Provider))
+                        ScheduleDetailPrefetch(layer.Provider, view, viewportRevision, MaxDetailPrefetchTilesPerFrame);
+
+                    if (pixelInspection && ShowPixelGridOverlay)
+                        DrawPixelGrid(layer.Provider, view, scaleX, scaleY);
                 }
-
-                if (!hasMissingVisibleTile && IsDetailPrefetchActive(layer.Provider))
-                    ScheduleDetailPrefetch(layer.Provider, view, viewportRevision, MaxDetailPrefetchTilesPerFrame);
-
-                if (pixelInspection && ShowPixelGridOverlay)
-                    DrawPixelGrid(layer.Provider, view, scaleX, scaleY);
+                finally
+                {
+                    if (swipeScissorEnabled)
+                        GL.Disable(EnableCap.ScissorTest);
+                }
             }
         }
 

@@ -215,6 +215,11 @@ def main():
     )
     args = parser.parse_args()
 
+    input_path = os.path.abspath(args.input)
+    output_path = os.path.abspath(args.output)
+    if input_path.lower() == output_path.lower():
+        raise ValueError("输出文件不能覆盖输入影像")
+
     if args.resolution is not None and (
         not math.isfinite(args.resolution) or args.resolution <= 0
     ):
@@ -223,8 +228,8 @@ def main():
     target_crs = parse_crs(args.target_crs)
     resampling = RESAMPLING_METHODS[args.resampling]
     reproject_raster(
-        args.input,
-        args.output,
+        input_path,
+        output_path,
         target_crs,
         resampling,
         args.resolution,

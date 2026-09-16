@@ -69,15 +69,20 @@ def main():
     parser.add_argument("--cutline-json")
     args = parser.parse_args()
 
-    with rasterio.open(args.input) as src:
+    input_path = os.path.abspath(args.input)
+    output_path = os.path.abspath(args.output)
+    if input_path.lower() == output_path.lower():
+        raise ValueError("输出文件不能覆盖输入影像")
+
+    with rasterio.open(input_path) as src:
         if args.mode == "extent":
             if not args.bounds:
                 raise ValueError("范围裁剪缺少 bounds 参数")
-            clip_by_extent(src, args.output, args.bounds)
+            clip_by_extent(src, output_path, args.bounds)
         else:
             if not args.cutline_json:
                 raise ValueError("矢量裁剪缺少 cutline-json 参数")
-            clip_by_cutline(src, args.output, args.cutline_json)
+            clip_by_cutline(src, output_path, args.cutline_json)
 
     print(f"Saved to: {args.output}")
 

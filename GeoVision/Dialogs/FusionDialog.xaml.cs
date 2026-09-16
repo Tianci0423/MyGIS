@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using Microsoft.Win32;
@@ -25,6 +26,7 @@ namespace GeoVision.Dialogs
         private static readonly Regex PercentRegex = new(
             @"(?<percent>\d+(?:\.\d+)?)%",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private const string BatchEventPrefix = "BATCH_EVENT ";
 
         public FusionRequest? Request { get; private set; }
 
@@ -142,6 +144,7 @@ namespace GeoVision.Dialogs
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             await process.WaitForExitAsync();
+            process.WaitForExit(); // Ensure redirected asynchronous streams are fully drained.
 
             if (process.ExitCode != 0)
             {
@@ -157,6 +160,217 @@ namespace GeoVision.Dialogs
 
             if (!File.Exists(outputFullPath))
                 throw new FileNotFoundException("推理进程结束，但没有生成输出文件。", outputFullPath);
+        }
+
+        public static async Task<BatchFusionRunResult> RunBatchInferenceAsync(
+            IReadOnlyList<FusionRequest> requests,
+            bool continueOnError,
+            Action<Process>? onProcessCreated = null,
+            IProgress<BatchFusionProgress>? progress = null)
+        {
+            if (requests.Count == 0)
+                return new BatchFusionRunResult(Array.Empty<int>(), Array.Empty<BatchFusionFailure>(), 0);
+
+            foreach (var request in requests)
+            {
+                string? outputDir = Path.GetDirectoryName(Path.GetFullPath(request.OutputPath));
+                if (!string.IsNullOrWhiteSpace(outputDir))
+                    Directory.CreateDirectory(outputDir);
+            }
+
+            string tempDir = Path.Combine(Path.GetTempPath(), "GeoVision", "fusion_jobs");
+            Directory.CreateDirectory(tempDir);
+            string jobFile = Path.Combine(tempDir, $"fusion_{Guid.NewGuid():N}.json");
+            var manifest = new
+            {
+                continue_on_error = continueOnError,
+                jobs = requests.Select(request => new
+                {
+                    ms_path = Path.GetFullPath(request.MsPath),
+                    pan_path = Path.GetFullPath(request.PanPath),
+                    save_path = Path.GetFullPath(request.OutputPath),
+                    float_scale = request.FloatScale ?? DefaultFloatScale,
+                    auto_float_scale = !request.FloatScale.HasValue
+                }).ToArray()
+            };
+
+            await File.WriteAllTextAsync(
+                jobFile,
+                JsonSerializer.Serialize(manifest),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            var first = requests[0];
+            string fusionDir = Path.GetDirectoryName(first.ScriptPath) ?? Environment.CurrentDirectory;
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = first.PythonPath,
+                WorkingDirectory = fusionDir,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            startInfo.Environment["PYTHONPATH"] = fusionDir;
+            startInfo.ArgumentList.Add(first.ScriptPath);
+            startInfo.ArgumentList.Add("--model_path");
+            startInfo.ArgumentList.Add(first.ModelPath);
+            startInfo.ArgumentList.Add("--job_file");
+            startInfo.ArgumentList.Add(jobFile);
+            startInfo.ArgumentList.Add("--norm_mode");
+            startInfo.ArgumentList.Add("scale");
+            startInfo.ArgumentList.Add("--no_match_pan_to_ms");
+            startInfo.ArgumentList.Add("--overlap");
+            startInfo.ArgumentList.Add(first.Overlap.ToString(CultureInfo.InvariantCulture));
+            if (first.NoCuda) startInfo.ArgumentList.Add("--no_cuda");
+            if (first.Fp16) startInfo.ArgumentList.Add("--fp16");
+
+            var output = new ProcessOutputBuffer();
+            var completed = new HashSet<int>();
+            var failures = new Dictionary<int, string>();
+            var gate = new object();
+            int currentIndex = -1;
+            int attempted = 0;
+
+            void HandleOutputLine(string? line)
+            {
+                output.AppendLine(line);
+                if (string.IsNullOrWhiteSpace(line))
+                    return;
+
+                if (TryParseBatchEvent(line, out var batchEvent))
+                {
+                    if (batchEvent.Event == "complete")
+                        return;
+                    if (batchEvent.Index < 0 || batchEvent.Index >= requests.Count)
+                        return;
+
+                    lock (gate)
+                    {
+                        currentIndex = batchEvent.Index;
+                        attempted = Math.Max(attempted, batchEvent.Index + 1);
+                        switch (batchEvent.Event)
+                        {
+                            case "start":
+                                progress?.Report(new BatchFusionProgress(
+                                    batchEvent.Index, requests.Count, 0, requests[batchEvent.Index].MsPath));
+                                break;
+                            case "done":
+                                completed.Add(batchEvent.Index);
+                                progress?.Report(new BatchFusionProgress(
+                                    batchEvent.Index, requests.Count, 100, requests[batchEvent.Index].MsPath));
+                                break;
+                            case "error":
+                                string failureMessage = batchEvent.Message ?? "融合失败。";
+                                failures[batchEvent.Index] = IsDiskFullMessage(failureMessage)
+                                    ? BuildDiskFullError(requests[batchEvent.Index].OutputPath, failureMessage)
+                                    : failureMessage;
+                                progress?.Report(new BatchFusionProgress(
+                                    batchEvent.Index, requests.Count, 100, requests[batchEvent.Index].MsPath));
+                                break;
+                        }
+                    }
+                    return;
+                }
+
+                int? percent = TryParseInferenceProgress(line);
+                lock (gate)
+                {
+                    if (percent.HasValue && currentIndex >= 0 && currentIndex < requests.Count)
+                    {
+                        progress?.Report(new BatchFusionProgress(
+                            currentIndex, requests.Count, percent.Value, requests[currentIndex].MsPath));
+                    }
+                }
+            }
+
+            try
+            {
+                using var process = new Process { StartInfo = startInfo };
+                onProcessCreated?.Invoke(process);
+                process.OutputDataReceived += (_, e) => HandleOutputLine(e.Data);
+                process.ErrorDataReceived += (_, e) => output.AppendLine(e.Data);
+
+                if (!process.Start())
+                    throw new InvalidOperationException("无法启动 Python 批量推理进程。");
+
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                await process.WaitForExitAsync();
+                process.WaitForExit(); // Ensure the final batch event has been delivered.
+
+                if (process.ExitCode != 0)
+                {
+                    string message = output.ToString();
+                    int errorIndex = Math.Clamp(currentIndex, 0, requests.Count - 1);
+                    if (IsDiskFullMessage(message))
+                        throw new IOException(BuildDiskFullError(requests[errorIndex].OutputPath, message));
+
+                    throw new InvalidOperationException(
+                        string.IsNullOrWhiteSpace(message)
+                            ? $"批量推理失败，退出码 {process.ExitCode}。"
+                            : message);
+                }
+
+                lock (gate)
+                {
+                    foreach (int index in completed.ToArray())
+                    {
+                        if (!File.Exists(requests[index].OutputPath))
+                        {
+                            completed.Remove(index);
+                            failures[index] = "推理报告完成，但没有生成输出文件。";
+                        }
+                    }
+
+                    return new BatchFusionRunResult(
+                        completed.OrderBy(index => index).ToArray(),
+                        failures.OrderBy(pair => pair.Key)
+                            .Select(pair => new BatchFusionFailure(pair.Key, pair.Value))
+                            .ToArray(),
+                        attempted);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(jobFile))
+                        File.Delete(jobFile);
+                }
+                catch
+                {
+                    // Temporary job manifests are harmless if cleanup is interrupted.
+                }
+            }
+        }
+
+        private static bool TryParseBatchEvent(string line, out BatchProcessEvent batchEvent)
+        {
+            batchEvent = default!;
+            if (!line.StartsWith(BatchEventPrefix, StringComparison.Ordinal))
+                return false;
+
+            try
+            {
+                using var document = JsonDocument.Parse(line[BatchEventPrefix.Length..]);
+                JsonElement root = document.RootElement;
+                string? eventName = root.GetProperty("event").GetString();
+                int index = root.GetProperty("index").GetInt32();
+                string? message = root.TryGetProperty("message", out JsonElement messageElement)
+                    ? messageElement.GetString()
+                    : null;
+                if (string.IsNullOrWhiteSpace(eventName) || index < 0)
+                    return false;
+
+                batchEvent = new BatchProcessEvent(eventName, index, message);
+                return true;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
         }
 
         private static void AppendProcessLine(
@@ -313,7 +527,7 @@ namespace GeoVision.Dialogs
                 floatScale,
                 32,
                 false,
-                false,
+                true,
                 LoadAfterFusionBox.IsChecked == true);
 
             return ConfirmOutputDiskSpace(request);
@@ -527,6 +741,8 @@ namespace GeoVision.Dialogs
         {
             DialogResult = false;
         }
+
+        private sealed record BatchProcessEvent(string Event, int Index, string? Message);
     }
 
     public sealed record FusionRequest(
@@ -541,6 +757,19 @@ namespace GeoVision.Dialogs
         bool NoCuda,
         bool Fp16,
         bool LoadAfterFusion);
+
+    public sealed record BatchFusionProgress(
+        int TaskIndex,
+        int TaskCount,
+        int Percent,
+        string MsPath);
+
+    public sealed record BatchFusionFailure(int TaskIndex, string Message);
+
+    public sealed record BatchFusionRunResult(
+        IReadOnlyList<int> CompletedTaskIndices,
+        IReadOnlyList<BatchFusionFailure> Failures,
+        int AttemptedCount);
 
     public sealed record RasterLayerInfo(string Name, string FilePath, int BandCount = 0);
 }

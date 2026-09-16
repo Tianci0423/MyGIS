@@ -41,6 +41,16 @@ namespace GeoVision.Services
             MRect? bounds,
             string? cutlineJsonPath)
         {
+            string inputFullPath = Path.GetFullPath(rasterPath);
+            string outputFullPath = Path.GetFullPath(outputPath);
+            if (!File.Exists(inputFullPath))
+                throw new FileNotFoundException("输入影像不存在。", inputFullPath);
+            if (string.Equals(inputFullPath, outputFullPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("输出文件不能覆盖输入影像。");
+            if (mode == "cutline" &&
+                (string.IsNullOrWhiteSpace(cutlineJsonPath) || !File.Exists(cutlineJsonPath)))
+                throw new FileNotFoundException("找不到裁剪边界文件。", cutlineJsonPath);
+
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string pythonPath = Path.Combine(baseDir, "python_env", "runtime", "python", "python.exe");
             if (!File.Exists(pythonPath))
@@ -63,9 +73,9 @@ namespace GeoVision.Services
             };
             startInfo.ArgumentList.Add(scriptPath);
             startInfo.ArgumentList.Add("--input");
-            startInfo.ArgumentList.Add(rasterPath);
+            startInfo.ArgumentList.Add(inputFullPath);
             startInfo.ArgumentList.Add("--output");
-            startInfo.ArgumentList.Add(outputPath);
+            startInfo.ArgumentList.Add(outputFullPath);
             startInfo.ArgumentList.Add("--mode");
             startInfo.ArgumentList.Add(mode);
 
@@ -91,6 +101,7 @@ namespace GeoVision.Services
             Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
             Task<string> stderrTask = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
+            process.WaitForExit();
             string stdout = await stdoutTask;
             string stderr = await stderrTask;
 

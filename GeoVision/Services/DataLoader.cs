@@ -137,6 +137,12 @@ namespace GeoVision.Services
                 _ => throw new InvalidOperationException("Unknown renderer type")
             };
 
+            if (!RasterRenderer.HasFiniteDisplayPixels(inspectDs, sourceBandIndexes))
+            {
+                throw new InvalidDataException(
+                    $"影像 {fileName} 没有可显示的有效像元。请检查影像是否全为 NoData、NaN 或无穷大值。");
+            }
+
             progress?.Report((95, $"正在计算显示参数 {fileName}"));
             var stretch = RasterRenderer.ComputeDisplayStretchParameters(inspectDs, sourceBandIndexes, rendererType);
 

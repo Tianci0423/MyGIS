@@ -23,6 +23,7 @@ python_env/
 
 # Local Codex work artifacts
 .codex_work/
+tmp/
 
 # Python caches
 __pycache__/

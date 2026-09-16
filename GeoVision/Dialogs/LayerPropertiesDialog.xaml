@@ -89,6 +89,21 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel>
+                            <TextBlock Text="像元宽度（X）" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="PixelSizeXText" FontSize="13" Foreground="#444" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="像元高度（Y）" FontSize="11" Foreground="#AAA"/>
+                            <TextBlock x:Name="PixelSizeYText" FontSize="13" Foreground="#444" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
                             <TextBlock Text="波段数" FontSize="11" Foreground="#AAA"/>
                             <TextBlock x:Name="BandCountText" FontSize="13" Foreground="#444"/>
                         </StackPanel>

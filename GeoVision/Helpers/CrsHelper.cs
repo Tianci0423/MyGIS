@@ -10,26 +10,39 @@ namespace GeoVision.Helpers
         /// </summary>
         public static (double Lon, double Lat) ToLonLat(double x, double y, string sourceCrsStr)
         {
-            int srcCode = ParseEpsgCode(sourceCrsStr);
-            if (srcCode == 4326)
+            if (string.IsNullOrWhiteSpace(sourceCrsStr))
                 return (x, y);
 
-            // Prefer GDAL OSR (already loaded and working)
+            // Prefer GDAL OSR. SetFromUserInput handles EPSG identifiers,
+            // WKT/PROJ definitions and other GDAL-supported CRS forms.
             try
             {
                 using var srcSr = new SpatialReference("");
-                srcSr.ImportFromEPSG(srcCode);
+                if (srcSr.SetFromUserInput(sourceCrsStr.Trim()) != 0)
+                    return (x, y);
+                using (var wgs84 = new SpatialReference("EPSG:4326"))
+                {
+                    if (srcSr.IsSameGeogCS(wgs84) != 0)
+                        return (x, y);
+                }
                 using var dstSr = new SpatialReference("");
                 dstSr.ImportFromEPSG(4326);
 
                 using var transform = new OSGeo.OSR.CoordinateTransformation(srcSr, dstSr);
                 double[] point = { x, y, 0 };
                 transform.TransformPoint(point);
-                return (point[0], point[1]);
+                return (double.IsFinite(point[0]) && double.IsFinite(point[1]))
+                    ? (point[0], point[1])
+                    : (x, y);
             }
             catch
             {
-                // Fallback: DotSpatial
+                // Fallback is only safe for an explicit EPSG identifier.
+                int srcCode = ParseEpsgCode(sourceCrsStr);
+                if (srcCode == 4326 &&
+                    !sourceCrsStr.Trim().Equals("EPSG:4326", StringComparison.OrdinalIgnoreCase))
+                    return (x, y);
+
                 try
                 {
                     var srcProj = ProjectionInfo.FromEpsgCode(srcCode);
@@ -40,7 +53,9 @@ namespace GeoVision.Helpers
                 }
                 catch
                 {
-                    return MercatorToLonLat(x, y);
+                    return sourceCrsStr.Trim().Equals("EPSG:3857", StringComparison.OrdinalIgnoreCase)
+                        ? MercatorToLonLat(x, y)
+                        : (x, y);
                 }
             }
         }
@@ -61,6 +76,8 @@ namespace GeoVision.Helpers
         /// </summary>
         public static (double X, double Y) LonLatToMercator(double lon, double lat)
         {
+            lon = Math.Clamp(lon, -180d, 180d);
+            lat = Math.Clamp(lat, -85.0511287798066d, 85.0511287798066d);
             double x = lon * 20037508.34 / 180;
             double y = Math.Log(Math.Tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180);
             y = y * 20037508.34 / 180;
